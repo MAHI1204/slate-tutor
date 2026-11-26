@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { createTutor, TutorError } from './tutor.mjs';
+import { createTutor, TutorError, validateLesson } from './tutor.mjs';
 
 const files = new Map([
   ['/', ['index.html', 'text/html']],
@@ -60,6 +60,33 @@ export function createApp({ ollama = 'http://127.0.0.1:11434', gemini = null, fe
       }
       if (request.method === 'POST' && path === '/api/followup') {
         return json(response, 200, await tutor.followup(await input(request), client.signal));
+      }
+      if (request.method === 'POST' && path === '/api/import') {
+        const board = await input(request);
+        try { return json(response, 200, validateLesson(board)); }
+        catch (error) { throw new TutorError(400, error.message); }
+      }
+      if (request.method === 'POST' && path === '/api/article') {
+        const { url } = await input(request);
+        let title;
+        try {
+          const article = new URL(url);
+          if (article.origin !== 'https://en.wikipedia.org' || !article.pathname.startsWith('/wiki/')) throw new Error();
+          title = decodeURIComponent(article.pathname.slice(6));
+          if (!title.trim() || title.length > 250) throw new Error();
+        } catch {
+          throw new TutorError(400, 'Paste an English Wikipedia article link beginning with https://en.wikipedia.org/wiki/.');
+        }
+        const endpoint = new URL('https://en.wikipedia.org/w/api.php');
+        endpoint.search = new URLSearchParams({ action: 'query', prop: 'extracts', exintro: '1', explaintext: '1', redirects: '1', format: 'json', formatversion: '2', titles: title });
+        let page;
+        try {
+          const result = await fetchImpl(endpoint, { redirect: 'error', signal: AbortSignal.any([client.signal, AbortSignal.timeout(10000)]), headers: { 'User-Agent': 'SlateTutor/1.0 (https://github.com/MAHI1204/slate-tutor)' } });
+          if (!result.ok) throw new Error();
+          page = (await result.json()).query?.pages?.[0];
+        } catch { throw new TutorError(502, 'Wikipedia is unavailable. You can paste the excerpt into study notes.'); }
+        if (!page?.extract?.trim()) throw new TutorError(404, 'This article has no introduction to import.');
+        return json(response, 200, { title: page.title, text: page.title + '\n' + url + '\n' + page.extract.slice(0, 8000) });
       }
       const file = request.method === 'GET' && files.get(path);
       if (!file) return json(response, 404, { error: 'Page not found.' });

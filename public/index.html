@@ -9,41 +9,27 @@
   <script type="module" src="/app.js"></script>
 </head>
 <body>
-  <aside class="sidebar" aria-label="Lessons">
+  <header class="topbar">
     <div class="brand"><span class="brand-mark" aria-hidden="true"></span>Slate Tutor</div>
-    <button id="new-lesson" class="new-button" type="button">New lesson</button>
-    <nav class="history-area" aria-label="Saved lessons">
-      <h2>Saved lessons</h2>
-      <div id="history" class="history"></div>
-    </nav>
-    <div class="samples">
-      <h2>Try a sample</h2>
-      <button type="button" data-sample="moon">Why the Moon changes shape</button>
-      <button type="button" data-sample="search">How binary search works</button>
-    </div>
-  </aside>
-
+    <nav aria-label="Workspace"><button id="new-lesson">New board</button><button id="library-tab">My boards</button></nav>
+  </header>
   <main>
-    <header class="main-header">
-      <div>
-        <h1>What do you want<br class="wide-break"> to understand?</h1>
-        <p>Build a lesson you can watch, listen to, and question as you go.</p>
-      </div>
-      <div class="connection">
-        <span class="model-indicator" id="model-status" role="status">Checking model settings…</span>
-        <button id="refresh-models" class="quiet" type="button">Refresh</button>
-      </div>
-    </header>
-
+    <section id="home">
+    <header class="intro"><h1>What shall we unpack?</h1><p>Turn a question or your study notes into a narrated whiteboard.</p></header>
     <section class="composer surface" aria-label="Create a lesson">
       <form id="topic-form">
-        <label for="topic">Topic or question</label>
+        <fieldset class="modes"><legend class="sr-only">Lesson mode</legend>
+        <label><input type="radio" name="mode" value="Topic" checked>Learn a topic</label>
+        <label><input type="radio" name="mode" value="Exam">Exam practice</label>
+        <label><input type="radio" name="mode" value="Homework">Homework help</label></fieldset>
+        <label for="topic" class="sr-only">Topic or question</label>
         <textarea id="topic" rows="2" maxlength="500" required placeholder="For example, why does an RC circuit delay a signal?"></textarea>
         <div class="composer-tools">
           <div class="selectors">
             <label class="select-label">Level
               <select id="level"><option>Beginner</option><option>Intermediate</option><option>Advanced</option></select>
             </label>
+            <label class="select-label">Language<select id="language"><option>English</option><option>German</option><option>Telugu</option></select></label>
             <label class="select-label" id="model-label" hidden>Model
               <select id="model"></select>
             </label>
@@ -51,13 +37,14 @@
           </div>
           <div class="form-actions">
             <button id="cancel" class="quiet" type="button" hidden>Cancel</button>
-            <button id="generate" class="primary" type="submit">Create lesson</button>
+            <button id="generate" class="primary" type="submit">Start board →</button>
           </div>
         </div>
         <details class="notes-panel" id="notes-panel">
-          <summary>Add study notes</summary>
+          <summary>Attach notes or a Wikipedia article</summary>
           <label for="notes" class="sr-only">Study notes</label>
           <textarea id="notes" rows="3" maxlength="12000" placeholder="Paste notes for the tutor to use…"></textarea>
+          <div class="source-row"><label>English Wikipedia article URL<input type="url" id="article" placeholder="https://en.wikipedia.org/wiki/Photosynthesis"></label><button class="quiet" type="button" id="import-article">Import introduction</button></div>
           <label class="file-label">Or choose a text file
             <input id="notes-file" type="file" accept=".txt,.md,.csv,text/plain,text/markdown,text/csv">
           </label>
@@ -66,32 +53,35 @@
       </form>
     </section>
 
-    <section id="empty" class="empty surface" hidden>
-      <h2>Your whiteboard is ready</h2>
-      <p>Create a lesson from your own question or try a sample from the sidebar.</p>
+    <details class="exchange"><summary>Bring a lesson from Academic AI</summary>
+    <p>Enter your topic above, copy the prompt into General ChatBot, then paste its JSON answer here.</p>
+    <button id="copy-prompt" class="quiet">Copy lesson prompt</button>
+    <label for="lesson-json">Lesson JSON</label><textarea id="lesson-json" rows="4"></textarea>
+    <button id="import-board" class="secondary">Open imported board</button><p id="import-status" role="status"></p></details>
+    <section id="recent-section" class="shelf" hidden><h2>Continue learning</h2><div id="recent" class="tiles"></div></section>
+    <section class="shelf"><h2>Try a board</h2><div class="tiles"><button data-sample="predictor"><small>Computer architecture</small>Trace a two-bit branch predictor ↗</button><button data-sample="plant"><small>Biology</small>How photosynthesis works ↗</button><button data-sample="moon"><small>Astronomy</small>Why the Moon changes shape ↗</button><button data-sample="search"><small>Algorithms</small>How binary search works ↗</button></div></section>
+    <div class="connection"><span id="model-status" class="model-indicator" role="status"></span><button id="refresh-models" class="quiet">Refresh</button></div>
     </section>
-
+    <section id="library" hidden><h1>My boards</h1><p>Lessons saved in this browser</p><div id="history" class="tiles"></div></section>
     <section id="lesson" class="lesson" aria-label="Current lesson" hidden>
       <div class="lesson-main surface">
         <div class="lesson-heading">
           <div><div class="lesson-type" id="lesson-type"></div><h2 id="lesson-title"></h2></div>
           <label class="narration"><input id="narration" type="checkbox" checked> Narration</label>
         </div>
-        <div class="board" id="board">
-          <div class="board-meta"><span>Whiteboard</span><span id="counter"></span></div>
-          <h3 id="step-title"></h3>
-          <div id="diagram" class="diagram"></div>
-        </div>
         <div class="transport">
           <button id="back" class="quiet" type="button">Back</button>
           <button id="play" class="secondary" type="button">Play lesson</button>
           <button id="next" class="quiet" type="button">Next step</button>
+          <label>Playback <select id="pace"><option value="lecture">Lecture</option><option value="interactive">Interactive · pause each step</option></select></label>
+          <label>Speed <select id="speed"><option>.75</option><option selected>1</option><option>1.25</option><option>1.5</option></select></label>
+          <label>Zoom <select id="zoom"><option value="0.75">75%</option><option value="1" selected>100%</option><option value="1.25">125%</option></select></label>
         </div>
-        <div class="transcript">
-          <h3>Explanation</h3>
-          <p id="explanation"></p>
-          <p id="speech-status" class="subtle" role="status" hidden></p>
-        </div>
+        <div class="board-meta"><span>Lesson board</span><span id="counter"></span></div>
+        <div id="viewport" tabindex="0" aria-label="Scrollable lesson board"><div class="board" id="board">
+          <div id="prior"></div><article class="sheet current" id="current">
+          <h3 id="step-title"></h3><p id="explanation"></p><div id="diagram" class="diagram"></div></article>
+        </div></div><p id="speech-status" class="subtle" role="status" hidden></p>
         <form id="followup-form" class="followup">
           <label for="followup">Ask about this step</label>
           <div class="followup-box">

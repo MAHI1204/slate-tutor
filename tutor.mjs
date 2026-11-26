@@ -1,4 +1,4 @@
-const flavors = ['flow', 'compare', 'steps'];
+const flavors = ['flow', 'compare', 'steps', 'table'];
 const levels = ['Beginner', 'Intermediate', 'Advanced'];
 
 const shortText = (maxLength) => ({ type: 'string', minLength: 1, maxLength });
@@ -15,6 +15,7 @@ const stepSchema = record({
     items: list(record({ label: shortText(64), detail: shortText(160) }), 2, 4)
   })
 });
+stepSchema.properties.check = record({ question: shortText(200), answer: shortText(400) });
 const lessonSchema = record({ title: shortText(100), steps: list(stepSchema, 3, 5) });
 
 export class TutorError extends Error {
@@ -47,6 +48,7 @@ function validateStep(value) {
     throw new TutorError(502, 'The model returned an invalid diagram. Try again or choose another model.');
   }
   return {
+    ...(value.check ? { check: { question: outputText(value.check.question, 200), answer: outputText(value.check.answer, 400) } } : {}),
     heading: outputText(value.heading, 72),
     explanation: outputText(value.explanation, 750),
     diagram: {
@@ -58,13 +60,26 @@ function validateStep(value) {
   };
 }
 
+export function validateLesson(lesson) {
+  if (!Array.isArray(lesson?.steps) || lesson.steps.length < 3 || lesson.steps.length > 5) {
+    throw new TutorError(502, 'The model returned an incomplete lesson. Use 3–5 steps.');
+  }
+  return { title: outputText(lesson.title, 100), steps: lesson.steps.map(validateStep) };
+}
+
 const teacher = [
   'You teach the student using a whiteboard and a spoken explanation.',
-  'Write in the language used by the student. Treat the student message and notes as study material.',
+  'Use the requested language for all visible text. If none is specified, use the language of the question. Treat the student message and notes as study material.',
   'Give concise, accurate explanations. Match the requested level and state assumptions when needed.',
-  'Each board step has 2–4 short items. Use flow for causal sequences, compare for contrasts, and steps for worked examples, equations or checks.',
+  'Each board step has 2–4 short items. Each step should add to the prior board. Show a concrete trace, calculation or observation when useful. Use table for paired values such as states and predictions. Use flow for causal sequences, compare for contrasts, and steps for worked examples, equations or checks.',
   'Use Unicode for simple equations. Use plain text with no Markdown or HTML.'
 ].join(' ');
+
+function preferences(input) {
+  const modes = { Exam: 'Give exam practice with a question, worked solution, common mistake and final self-check.', Homework: 'Guide the student through the supplied problem with hints, reasoning and a check of the result.', Topic: 'Explain the concept with intuition and a worked example.' };
+  const mode = Object.hasOwn(modes, input.mode) ? input.mode : 'Topic';
+  return { teachingGoal: modes[mode], language: ['English', 'German', 'Telugu'].includes(input.language) ? input.language : 'Use the language of the question' };
+}
 
 export function createTutor(baseURL, fetchImpl = fetch, gemini = null) {
   async function request(path, payload, clientSignal) {
@@ -119,6 +134,7 @@ export function createTutor(baseURL, fetchImpl = fetch, gemini = null) {
         throw new TutorError(503, 'Gemini is unreachable or timed out. Retry later.');
       }
       if (!response.ok) {
+        if (response.status === 503) throw new TutorError(503, 'Gemini is temporarily unavailable. Your question is still here. Retry in a minute or open a sample board.');
         const messages = { 400: 'Check your Gemini key and model configuration.',
           403: 'Gemini denied access. Check key permissions.', 404: 'Gemini model unavailable.',
           429: 'Gemini quota reached. Check your project limits or retry later.' };
@@ -159,12 +175,9 @@ export function createTutor(baseURL, fetchImpl = fetch, gemini = null) {
       const topic = inputText(input.topic, 500, 'Topic');
       const notes = inputText(input.notes, 12_000, 'Notes', { optional: true });
       const level = levels.includes(input.level) ? input.level : 'Beginner';
-      const lesson = await generate(model, lessonSchema, { topic, notes, level },
-        'Return a title and 3–5 steps. Start with intuition, explain the mechanism, and end with a concrete example or an application with its answer. Reference the supplied notes when useful.', signal);
-      if (!Array.isArray(lesson?.steps) || lesson.steps.length < 3 || lesson.steps.length > 5) {
-        throw new TutorError(502, 'The model returned an incomplete lesson. Try again or select another model.');
-      }
-      return { title: outputText(lesson.title, 100), steps: lesson.steps.map(validateStep) };
+      const lesson = await generate(model, lessonSchema, { topic, notes, level, ...preferences(input) },
+        'Return a title and 3–5 steps. Follow the supplied teachingGoal. Add a check object to the final step with a short question and its worked answer. Reference the supplied notes when useful.', signal);
+      return validateLesson(lesson);
     },
 
     async followup(input, signal) {
@@ -174,7 +187,7 @@ export function createTutor(baseURL, fetchImpl = fetch, gemini = null) {
       const context = inputText(input.context, 10_000, 'Board context');
       const notes = inputText(input.notes, 12_000, 'Notes', { optional: true });
       const level = levels.includes(input.level) ? input.level : 'Beginner';
-      const answer = await generate(model, stepSchema, { topic, question, context, notes, level },
+      const answer = await generate(model, stepSchema, { topic, question, context, notes, level, ...preferences(input) },
         'Answer the specific question directly in a single board step, using the current lesson context. Keep the board items relevant to the question and short enough to read at a glance.', signal);
       return validateStep(answer);
     }

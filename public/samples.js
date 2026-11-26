@@ -3,6 +3,33 @@ const scene = (heading, explanation, type, ...items) =>
   ({ heading, explanation, diagram: { type, items } });
 
 export const samples = {
+  predictor: {
+    title: 'Trace a two-bit branch predictor',
+    steps: [
+      scene('Read the direction counter', 'Consider one conditional branch with a dedicated two-bit counter. For this example there is no aliasing and every update finishes before the next prediction.', 'table',
+        item('00 · strongly not taken', 'Predict not taken'), item('01 · weakly not taken', 'Predict not taken'), item('10 · weakly taken', 'Predict taken'), item('11 · strongly taken', 'Predict taken')),
+      scene('Follow a taken outcome', 'Start in 01. Read the upper bit before updating: it is zero, so predict not taken. The branch resolves taken. Count one miss and increment the counter to 10.', 'flow',
+        item('Predict', '01 → not taken'), item('Resolve', 'Observed outcome: taken'), item('Train', '01 + 1 → 10')),
+      scene('Trace three predictions', 'Starting in 01, apply the outcomes taken, taken, not taken. Each row starts from the state left by the previous row. Two of the three predictions miss.', 'table',
+        item('01 · predict NT', 'Actual T → miss → 10'), item('10 · predict T', 'Actual T → hit → 11'), item('11 · predict T', 'Actual NT → miss → 10')),
+      { ...scene('Check your prediction', 'Continue from state 10. Make your prediction before revealing the answer.', 'compare',
+        item('Current counter', '10 · weakly taken'), item('Next actual outcome', 'Not taken')),
+        check: { question: 'What is the prediction and the state after training?', answer: 'Predict taken, record a miss, and decrement from 10 to 01.' } }
+    ]
+  },
+  plant: {
+    title: 'How photosynthesis works',
+    steps: [
+      scene('Follow the energy and the matter', 'A leaf uses light energy to build sugars from carbon dioxide and water. Follow the carbon and the energy separately.', 'compare',
+        item('Energy', 'Light arrives from the Sun'), item('Carbon', 'Carbon dioxide enters through tiny pores in the leaf')),
+      scene('Capture light', 'Inside chloroplasts, pigments absorb light. The light reactions use water and produce oxygen. They also supply ATP and NADPH for the next stage.', 'flow',
+        item('Light absorption', 'Pigments absorb incoming light'), item('Energy transfer', 'The light reactions produce ATP and NADPH')),
+      scene('Build sugar', 'The Calvin cycle uses ATP and NADPH to turn carbon from carbon dioxide into small sugar molecules. The plant can use these to make sucrose or starch.', 'steps',
+        item('Fix carbon', 'Incorporate carbon dioxide into an organic molecule'), item('Make sugar precursors', 'Use energy and reducing power from the light reactions')),
+      scene('Check the oxygen', 'Where did the oxygen released by a leaf come from? It came from water split during the light reactions. The carbon in sugar came from carbon dioxide.', 'compare',
+        item('Released oxygen', 'From water'), item('Carbon in sugar', 'From carbon dioxide'))
+    ]
+  },
   moon: {
     title: 'Why the Moon changes shape',
     steps: [

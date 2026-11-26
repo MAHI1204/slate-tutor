@@ -5,7 +5,8 @@ const historyKey = 'slate-tutor-history-v1';
 const speech = window.speechSynthesis;
 const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 let saved = readSaved();
-let lesson = saved[0] || makeSample('moon');
+let lesson = null;
+let libraryOpen = false;
 let activeRequest = null;
 let models = [];
 let modelCheck = 0;
@@ -92,6 +93,13 @@ function renderHistory() {
     button.addEventListener('click', () => openLesson(item));
     return button;
   });
+  ui['recent-section'].hidden = !entries.length;
+  ui.recent.replaceChildren(...saved.slice(0, 3).map((item) => {
+    const button = element('button', item.title);
+    button.prepend(element('small', 'Resume · Step ' + (item.cursor + 1)));
+    button.addEventListener('click', () => openLesson(item));
+    return button;
+  }));
   ui.history.replaceChildren(...(entries.length ? entries : [element('p', 'Your generated lessons will appear here.')]));
 }
 
@@ -126,9 +134,9 @@ function renderControls() {
   ui.play.textContent = playback ? 'Pause lesson' : 'Play lesson';
 }
 
-function renderBoard(step) {
+function drawDiagram(step, target) {
   const diagram = step.diagram;
-  ui.diagram.className = 'diagram diagram-' + diagram.type;
+  target.className = 'diagram diagram-' + diagram.type;
   const fragment = document.createDocumentFragment();
   diagram.items.forEach(({ label, detail }, index) => {
     if (index > 0 && diagram.type === 'flow') {
@@ -141,7 +149,31 @@ function renderBoard(step) {
     card.append(element('strong', label), element('p', detail));
     fragment.append(card);
   });
-  ui.diagram.replaceChildren(fragment);
+  target.replaceChildren(fragment);
+}
+
+function addCheck(sheet, check) {
+  if (!check) return;
+  const details = element('details', '', 'knowledge-check');
+  details.append(element('summary', check.question), element('p', check.answer));
+  sheet.append(details);
+}
+
+function renderBoard(step) {
+  const previous = lesson.steps.slice(0, lesson.cursor).map((part, index) => {
+    const sheet = element('article', '', 'sheet');
+    const visual = element('div');
+    drawDiagram(part, visual);
+    sheet.append(element('h3', (index + 1) + '. ' + part.heading), element('p', part.explanation), visual);
+    addCheck(sheet, part.check);
+    return sheet;
+  });
+  ui.prior.replaceChildren(...previous);
+  drawDiagram(step, ui.diagram);
+  ui.current.querySelector('.knowledge-check')?.remove();
+  addCheck(ui.current, step.check);
+  ui.viewport.scrollTop += ui.current.getBoundingClientRect().top - ui.viewport.getBoundingClientRect().top - 12;
+
   ui.board.classList.remove('stage-forward');
   if (!playback) {
     requestAnimationFrame(() => {
@@ -155,11 +187,12 @@ function renderLesson() {
   renderControls();
   const step = activeStep();
   ui.lesson.hidden = !step;
-  ui.empty.hidden = Boolean(step);
+  ui.home.hidden = Boolean(step) || libraryOpen;
+  ui.library.hidden = !libraryOpen;
   if (!step) return;
   ui['lesson-type'].textContent = lesson.sample ? 'Sample lesson' : lesson.level;
   ui['lesson-title'].textContent = lesson.title;
-  ui['step-title'].textContent = step.heading;
+  ui['step-title'].textContent = (lesson.cursor + 1) + '. ' + step.heading;
   ui.counter.textContent = 'Step ' + (lesson.cursor + 1) + ' of ' + lesson.steps.length;
   ui.explanation.textContent = step.explanation;
   if (lesson.sample) {
@@ -194,6 +227,7 @@ function cancelRequest() {
 function openLesson(value) {
   cancelRequest();
   stopPlayback();
+  libraryOpen = false;
   lesson = value;
   ui.followup.value = '';
   status(ui.notice);
@@ -223,7 +257,7 @@ function hold(milliseconds) {
 function readAloud(text) {
   if (!speech || !ui.narration.checked || !speech.getVoices().length) {
     if (ui.narration.checked) status(ui['speech-status'], 'No browser voice is available. Follow the written explanation.');
-    return hold(1400);
+    return hold(1400 / Number(ui.speed.value));
   }
   return new Promise((resolve) => {
     const utterance = new SpeechSynthesisUtterance(text);
@@ -235,7 +269,8 @@ function readAloud(text) {
       stopTalking = null;
       resolve();
     };
-    utterance.rate = 0.94;
+    utterance.lang = { German: 'de-DE', Telugu: 'te-IN' }[lesson.language] || 'en-US';
+    utterance.rate = Number(ui.speed.value);
     utterance.onend = done;
     utterance.onerror = (event) => {
       if (!['canceled', 'interrupted'].includes(event.error)) {
@@ -266,7 +301,7 @@ async function playFromHere() {
       await readAloud(node.textContent);
       if (playback !== run) return;
     }
-    if (lesson.cursor === lesson.steps.length - 1) break;
+    if (ui.pace.value === 'interactive' || lesson.cursor === lesson.steps.length - 1) break;
     lesson.cursor += 1;
     saveLesson();
   }
@@ -290,12 +325,14 @@ async function createLesson(event) {
   const model = ui.model.value;
   const level = ui.level.value;
   const notes = ui.notes.value.trim();
+  const mode = document.querySelector('input[name="mode"]:checked').value;
+  const language = ui.language.value;
   renderControls();
   status(ui.notice, 'Preparing your whiteboard lesson…');
   try {
-    const response = await api('/api/lesson', { body: { topic, notes, level, model }, signal: request.signal });
+    const response = await api('/api/lesson', { body: { topic, notes, level, model, mode, language }, signal: request.signal });
     if (activeRequest !== request) return;
-    lesson = { ...response, id: crypto.randomUUID(), topic, level, model, notes, cursor: 0 };
+    lesson = { ...response, id: crypto.randomUUID(), topic, level, model, notes, mode, language, cursor: 0 };
     ui.followup.value = '';
     status(ui.notice);
     status(ui['speech-status']);
@@ -322,7 +359,9 @@ async function askTutor(event) {
   const request = new AbortController();
   activeRequest = request;
   const current = lesson.cursor;
-  const { topic, level, notes, model } = lesson;
+  const { topic, level, notes } = lesson;
+  const model = lesson.model || ui.model.value;
+  if (!model) { activeRequest = null; renderControls(); status(ui['ask-status'], 'Connect a model to ask a follow-up.'); return; }
   const prior = lesson.steps.slice(Math.max(0, current - 4), current + 1).map((step, index, context) => ({
     current: index === context.length - 1,
     heading: step.heading, explanation: step.explanation, diagram: step.diagram, question: step.question
@@ -331,7 +370,7 @@ async function askTutor(event) {
   status(ui['ask-status'], 'Answering on the whiteboard…');
   try {
     const answer = await api('/api/followup', {
-      body: { topic, level, notes, model, question, context: JSON.stringify(prior) }, signal: request.signal
+      body: { topic, level, notes, model, language: lesson.language, mode: lesson.mode, question, context: JSON.stringify(prior) }, signal: request.signal
     });
     if (activeRequest !== request) return;
     lesson.steps.splice(current + 1, 0, { ...answer, question });
@@ -384,6 +423,28 @@ function useMic(button, target, message) {
   });
 }
 
+ui.zoom.addEventListener('change', () => { ui.board.style.zoom = ui.zoom.value; });
+ui['copy-prompt'].addEventListener('click', async () => {
+  const topic = ui.topic.value.trim();
+  if (!topic) { status(ui['import-status'], 'Enter a topic above first.'); ui.topic.focus(); return; }
+  const prompt = [
+    'Prepare a whiteboard lesson. Return only JSON in this shape:',
+    '{"title":"Lesson title","steps":[{"heading":"Section","explanation":"Narrated explanation","diagram":{"type":"flow","items":[{"label":"Cause","detail":"Detail"},{"label":"Effect","detail":"Detail"}]}}]}',
+    'Use 3–5 steps, each with 2–4 items. Diagram types: flow, compare, steps, table. Use a worked example. Include a check object with question and answer (max 200 and 400 characters) on the final step. Maximum characters: title 100, heading 72, explanation 750, label 64, detail 160.',
+    JSON.stringify({ topic, notes: ui.notes.value, level: ui.level.value, language: ui.language.value, mode: document.querySelector('input[name="mode"]:checked').value })
+  ].join('\n');
+  try { await navigator.clipboard.writeText(prompt); status(ui['import-status'], 'Prompt copied. Paste it into Academic AI.'); }
+  catch { ui['lesson-json'].value = prompt; ui['lesson-json'].select(); status(ui['import-status'], 'Copy the selected prompt, then replace it with the JSON answer.'); }
+});
+ui['import-board'].addEventListener('click', async () => {
+  try {
+    const raw = ui['lesson-json'].value.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+    const board = await api('/api/import', { body: JSON.parse(raw) });
+    openLesson({ ...board, id: crypto.randomUUID(), cursor: 0, topic: board.title, notes: ui.notes.value, level: ui.level.value, language: ui.language.value, model: ui.model.value, imported: true });
+    saveLesson();
+    renderHistory();
+  } catch (error) { status(ui['import-status'], error instanceof SyntaxError ? 'Paste the JSON answer from Academic AI.' : error.message, true); }
+});
 ui['topic-form'].addEventListener('submit', createLesson);
 ui['followup-form'].addEventListener('submit', askTutor);
 ui['refresh-models'].addEventListener('click', loadModels);
@@ -392,10 +453,29 @@ ui.cancel.addEventListener('click', () => {
   status(ui.notice, 'Request cancelled.');
   if (lesson && !lesson.sample) status(ui['ask-status']);
 });
+ui['library-tab'].addEventListener('click', () => {
+  openLesson(null);
+  libraryOpen = true;
+  renderLesson();
+});
+ui['import-article'].addEventListener('click', async () => {
+  const button = ui['import-article'];
+  button.disabled = true;
+  try {
+    const source = await api('/api/article', {body: {url: ui.article.value.trim()}});
+    const combined = [ui.notes.value.trim(), source.text].filter(Boolean).join('\n\n');
+    if (combined.length > 12000) throw new Error('Shorten your existing notes before importing this article.');
+    ui.notes.value = combined;
+    if (!ui.topic.value.trim()) ui.topic.value = source.title.slice(0, 500);
+    status(ui.notice, 'Introduction added to your notes. Review it before starting.');
+  } catch (error) { status(ui.notice, error.message, true); }
+  finally { button.disabled = false; }
+});
 ui['new-lesson'].addEventListener('click', () => {
   openLesson(null);
   ui.topic.value = '';
   ui.notes.value = '';
+  ui.article.value = '';
   ui['notes-file'].value = '';
   ui['notes-panel'].open = false;
   ui.topic.focus();
