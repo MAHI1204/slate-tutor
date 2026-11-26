@@ -1,6 +1,6 @@
 # Slate Tutor
 
-Slate Tutor is a general-purpose whiteboard teaching platform. Enter a topic or paste study notes. Gemini or a local Ollama model generates a lesson with scene-by-scene explanations and diagrams. Play the lesson to reveal and read the board. Pause or ask a follow-up to add a new explanation into the current lesson.
+Slate Tutor is a general-purpose whiteboard teaching platform. Enter a topic or paste study notes. Gemini or a local Ollama model plans a lesson and then draws it step by step on a slate board: shapes, arrows, equations and exact function graphs appear stroke by stroke while the narration explains them. Pause at any point, replay a step, or ask a follow-up to add a new drawn explanation to the current lesson.
 
 ## Try the samples first
 
@@ -10,7 +10,17 @@ Requires Node.js 22 or newer. Extract the project, open a terminal in that folde
 npm start
 ```
 
-Open <http://127.0.0.1:5173>. Choose a sample in the sidebar. The samples work with the model service offline.
+Open <http://127.0.0.1:5173>. Choose a sample in the sidebar: the Moon's phases, binary search, or what a derivative means (which plots computed curves). The samples work with the model service offline.
+
+## How the board works
+
+Each lesson step is a short script of *beats*. A beat is a sentence or two of narration plus the shapes drawn while it is spoken. The model can use a fixed set of shapes on a 16 × 9 grid: text, equations, boxes, circles, arrows, lines, graph axes, function plots, points and highlights. The server checks every shape it receives: it clamps positions to the board, drops shapes that are broken, and falls back to a written board if nothing drawable is left, so one bad shape never fails a lesson. The browser then lays out the shapes, nudges apart any that overlap, and draws them in a hand-drawn style.
+
+Plots are computed by the app, not drawn by the model. A plot's function is written in `x` with `+ - * / ^`, parentheses, `pi`, `e` and `sin cos tan asin acos atan sqrt abs exp ln log` (`log` is base 10). It is parsed safely, without `eval`.
+
+Lessons are generated in two stages. A quick first request returns the title and the step headings, then each step is generated in order. You can start playing step 1 while later steps are still being drawn; playback waits for a step that is not ready. **Cancel** stops generation and keeps the finished steps. A step that fails or was cancelled shows **Retry** in the outline.
+
+The board uses the Caveat handwriting font (SIL Open Font License, bundled in `public/fonts/`). With reduced motion turned on in your system settings, each beat appears at once instead of being drawn.
 
 ## Run with Gemini in a GitHub Codespace
 
@@ -29,13 +39,15 @@ Add a Codespaces secret named `GEMINI_API_KEY` to the repository before creating
 4. Start the app with `npm start`, open it, and click **Refresh** beside the model status.
 5. Pick the installed model, enter a question, and click **Create lesson**. Try a follow-up while viewing a step.
 
+The app asks Ollama for a context window of 8192 tokens and up to 3000 output tokens per step (`num_ctx` and `num_predict`), and allows each request 3 minutes. Small models draw simpler boards; Gemini gives the best results.
+
 The app uses the local Ollama JSON API and requires no paid API key. Model generation speed and output quality depend on the model and machine. The browser handles narration and optional push-to-talk dictation. Browser voice availability varies. Dictation can use your browser provider's speech service, and typed input works without it. The app serves on loopback by default. Notes and generated lessons are saved in that browser's local storage.
 
-The first version supports text, TXT, Markdown, and CSV. A lesson is generated before playback, and follow-ups pause playback. Voice input is push-to-talk. The supported board formats are flow, comparison, and ordered steps.
+Study notes can be typed or loaded from TXT, Markdown, or CSV files. Follow-ups pause playback and open once every step of the lesson is drawn. Voice input is push-to-talk. Lessons saved by earlier versions of the app are converted to the drawn format when they are opened.
 
 ## Development
 
-There is no package installation or build step. Run the HTTP integration tests with:
+There is no package installation or build step. Run the unit and HTTP integration tests with:
 
 ```bash
 npm test
