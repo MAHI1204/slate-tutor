@@ -70,28 +70,28 @@ h1 { font-size: clamp(2.15rem, 4.25vw, 4rem); line-height: 1.03; letter-spacing:
 .lesson-type { margin-bottom: .25rem; font-size: .84rem; color: var(--muted); }
 .lesson-heading h2 { font-size: clamp(1.25rem, 2.5vw, 1.9rem); line-height: 1.2; overflow-wrap: anywhere; letter-spacing: -.03em; }
 .narration { display: flex; align-items: center; gap: .35rem; font-size: .9rem; }
+/* Caveat 400 latin, from @fontsource/caveat@5.2.8 (cdn.jsdelivr.net), SIL Open Font License: fonts/OFL.txt */
+@font-face { font-family: 'Caveat'; src: url('/fonts/caveat.woff2') format('woff2'); font-weight: 400; font-style: normal; font-display: swap; }
 .board {
-  padding: 1rem; margin-top: .85rem; border-radius: .75rem; border: 1px solid #cbdcdb; min-height: 13rem;
-  background-color: #f9fcfa; background-image: radial-gradient(#ceded8 1px, transparent 1px); background-size: 16px 16px;
+  --slate: #1f2d33; --chalk: #eef3ee; --chalk-accent: #8ee0ba; --chalk-dim: #9fb3ad;
+  --hand: 'Caveat', 'Segoe Print', 'Comic Sans MS', cursive;
+  padding: .9rem 1rem 1rem; margin-top: .85rem; border-radius: .75rem; border: 6px solid #3a4b4f; color: var(--chalk);
+  background-color: var(--slate); background-image: radial-gradient(rgba(238, 243, 238, .05) 1px, transparent 1px); background-size: 18px 18px;
 }
-.board-meta { display: flex; justify-content: space-between; color: #476159; font-size: .85rem; gap: .5rem; }
-.board h3 { font-size: clamp(1.05rem, 2.1vw, 1.36rem); letter-spacing: -.02em; margin: .6rem 0 .9rem; overflow-wrap: anywhere; }
-.diagram { display: flex; gap: .6rem; align-items: stretch; }
-.board-card { flex: 1; min-width: 0; border-radius: .55rem; background: #fff; border: 1px solid #c8ddd5; padding: .65rem .7rem; overflow-wrap: anywhere; }
-.board-card:nth-of-type(2n) { background: #e6f4ee; }
-.board-card strong { display: block; font-weight: 700; line-height: 1.25; margin-bottom: .25rem; }
-.board-card p { font-size: .9rem; line-height: 1.45; white-space: pre-line; }
-.diagram-steps { flex-direction: column; gap: .45rem; }
-.diagram-steps .board-card { display: grid; grid-template-columns: 1.35rem minmax(0, 1fr); column-gap: .55rem; }
-.diagram-steps .board-card p { grid-column: 2; }
-.board-number { color: var(--accent); font-weight: 700; }
-.connector { align-self: center; color: #337463; font-weight: 750; }
-.stage-forward .board-card { animation: reveal .28s ease-out both; }
-.stage-forward .board-card:nth-of-type(2) { animation-delay: .08s; }
-.stage-forward .board-card:nth-of-type(3) { animation-delay: .16s; }
-.stage-forward .board-card:nth-of-type(4) { animation-delay: .24s; }
-@keyframes reveal { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
-@media (prefers-reduced-motion: reduce) { .stage-forward .board-card { animation: none; } }
+.board-meta { display: flex; justify-content: space-between; align-items: center; color: var(--chalk-dim); font-size: .85rem; gap: .5rem; }
+.chalk-button { min-height: 2.1rem; padding: .3rem .7rem; background: transparent; color: var(--chalk); border: 1px solid #56686b; font-weight: 600; }
+.chalk-button:not(:disabled):hover { background: #2b3c42; filter: none; }
+.board h3 { font-family: var(--hand); font-weight: 400; font-size: clamp(1.5rem, 3vw, 2.1rem); line-height: 1.15; margin: .3rem 0 .4rem; overflow-wrap: anywhere; color: var(--chalk); }
+.board-svg { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; }
+.board-svg text { font-family: var(--hand); }
+.board-svg .ink { fill: var(--chalk); }
+.board-svg .ink.accent { fill: var(--chalk-accent); }
+.board-svg .ink.dim { fill: var(--chalk-dim); }
+.board-svg .stroke { fill: none; stroke: var(--chalk); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+.board-svg .stroke.faint { stroke-width: 2; opacity: .45; }
+.board-svg .stroke.accent { stroke: var(--chalk-accent); }
+.board-svg .stroke.dot { stroke-width: 5; fill: var(--chalk-accent); }
+#explanation span[data-active="true"] { background: var(--accent-light); color: var(--ink); border-radius: .25rem; box-shadow: 0 0 0 .15rem var(--accent-light); }
 .transport { margin: .75rem 0 .9rem; }
 .transcript h3 { font-size: .95rem; margin-bottom: .35rem; }
 .transcript p { white-space: pre-line; overflow-wrap: anywhere; }
@@ -126,9 +126,7 @@ h1 { font-size: clamp(2.15rem, 4.25vw, 4rem); line-height: 1.03; letter-spacing:
   .wide-break { display: none; }
 }
 @media(max-width: 475px) {
-  .diagram:not(.diagram-steps) { flex-direction: column; }
-  .connector { font-size: 0; }
-  .connector::after { content: '↓'; font-size: 1rem; }
   .lesson-heading { flex-wrap: wrap; }
+  .lesson-main { padding: .7rem; }
+  .board { padding: .5rem; border-width: 4px; }
 }
-.diagram > .pending { visibility: hidden; }

@@ -11,6 +11,8 @@ const files = new Map([
   ['/board-math.js', ['board-math.js', 'text/javascript']],
   ['/board-shapes.js', ['board-shapes.js', 'text/javascript']],
   ['/board-layout.js', ['board-layout.js', 'text/javascript']],
+  ['/board.js', ['board.js', 'text/javascript']],
+  ['/fonts/caveat.woff2', ['fonts/caveat.woff2', 'font/woff2', true]],
   ['/styles.css', ['styles.css', 'text/css']]
 ]);
 
@@ -69,10 +71,10 @@ export function createApp({ ollama = 'http://127.0.0.1:11434', gemini = null, fe
       }
       const file = request.method === 'GET' && files.get(path);
       if (!file) return json(response, 404, { error: 'Page not found.' });
-      const [name, type] = file;
+      const [name, type, binary] = file;
       const content = await readFile(new URL('./public/' + name, import.meta.url));
       response.writeHead(200, {
-        'Content-Type': type + '; charset=utf-8',
+        'Content-Type': binary ? type : type + '; charset=utf-8',
         'Cache-Control': 'no-store',
         'X-Content-Type-Options': 'nosniff',
         'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; base-uri 'none'; object-src 'none'"

@@ -1,9 +1,12 @@
 import { samples } from './samples.js';
+import { createBoard } from './board.js';
+import { isLegacyStep, legacyToBeats } from './board-shapes.js';
 
 const ui = Object.fromEntries([...document.querySelectorAll('[id]')].map((item) => [item.id, item]));
 const historyKey = 'slate-tutor-history-v1';
 const speech = window.speechSynthesis;
 const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+const board = createBoard(ui['board-svg'], { reducedMotion: window.matchMedia('(prefers-reduced-motion: reduce)').matches });
 let saved = readSaved();
 let lesson = saved[0] || makeSample('moon');
 let activeRequest = null;
@@ -22,7 +25,11 @@ function makeSample(key) {
 function readSaved() {
   try {
     const data = JSON.parse(localStorage.getItem(historyKey) || '[]');
-    return Array.isArray(data) ? data.filter((value) => value?.id && value.steps?.length > 0) : [];
+    if (!Array.isArray(data)) return [];
+    return data
+      .filter((value) => value?.id && Array.isArray(value.steps))
+      .map((value) => ({ ...value, steps: value.steps.map((step) => (isLegacyStep(step) ? legacyToBeats(step) : step)).filter(Boolean) }))
+      .filter((value) => value.steps.length > 0);
   } catch {
     return [];
   }
@@ -99,10 +106,6 @@ function activeStep() {
   return lesson?.steps[lesson.cursor];
 }
 
-function revealAll() {
-  for (const item of ui.diagram.children) item.classList.remove('pending');
-}
-
 function stopVoice() {
   stopTalking?.();
   if (speech) speech.cancel();
@@ -111,7 +114,6 @@ function stopVoice() {
 function stopPlayback() {
   playback = null;
   stopVoice();
-  revealAll();
   renderControls();
 }
 
@@ -127,27 +129,17 @@ function renderControls() {
 }
 
 function renderBoard(step) {
-  const diagram = step.diagram;
-  ui.diagram.className = 'diagram diagram-' + diagram.type;
-  const fragment = document.createDocumentFragment();
-  diagram.items.forEach(({ label, detail }, index) => {
-    if (index > 0 && diagram.type === 'flow') {
-      const arrow = element('span', '→', 'connector');
-      arrow.setAttribute('aria-hidden', 'true');
-      fragment.append(arrow);
-    }
-    const card = element('div', '', 'board-card');
-    if (diagram.type === 'steps') card.append(element('span', String(index + 1), 'board-number'));
-    card.append(element('strong', label), element('p', detail));
-    fragment.append(card);
+  ui['board-svg'].setAttribute('aria-label', board.describe(step));
+  return board.show(step, step.beats.length - 1);
+}
+
+function renderTranscript(step) {
+  const spans = step.beats.map((beat, index) => {
+    const span = element('span', beat.say);
+    span.dataset.beat = String(index);
+    return span;
   });
-  ui.diagram.replaceChildren(fragment);
-  ui.board.classList.remove('stage-forward');
-  if (!playback) {
-    requestAnimationFrame(() => {
-      if (!playback) ui.board.classList.add('stage-forward');
-    });
-  }
+  ui.explanation.replaceChildren(...spans.flatMap((span, index) => (index ? [' ', span] : [span])));
 }
 
 function renderLesson() {
@@ -161,7 +153,7 @@ function renderLesson() {
   ui['lesson-title'].textContent = lesson.title;
   ui['step-title'].textContent = step.heading;
   ui.counter.textContent = 'Step ' + (lesson.cursor + 1) + ' of ' + lesson.steps.length;
-  ui.explanation.textContent = step.explanation;
+  renderTranscript(step);
   if (lesson.sample) {
     status(ui['ask-status'], 'Create a custom lesson to ask your own follow-up questions.');
   } else if (!activeRequest) {
@@ -256,16 +248,8 @@ async function playFromHere() {
   while (playback === run) {
     renderLesson();
     const step = activeStep();
-    const blocks = [...ui.diagram.children];
-    for (const node of blocks.slice(1)) node.classList.add('pending');
     await readAloud(step.explanation);
     if (playback !== run) return;
-    for (const node of blocks.slice(1)) {
-      node.classList.remove('pending');
-      if (node.classList.contains('connector')) continue;
-      await readAloud(node.textContent);
-      if (playback !== run) return;
-    }
     if (lesson.cursor === lesson.steps.length - 1) break;
     lesson.cursor += 1;
     saveLesson();
@@ -325,7 +309,7 @@ async function askTutor(event) {
   const { topic, level, notes, model } = lesson;
   const prior = lesson.steps.slice(Math.max(0, current - 4), current + 1).map((step, index, context) => ({
     current: index === context.length - 1,
-    heading: step.heading, explanation: step.explanation, diagram: step.diagram, question: step.question
+    heading: step.heading, explanation: step.explanation, question: step.question
   }));
   renderControls();
   status(ui['ask-status'], 'Answering on the whiteboard…');

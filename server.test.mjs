@@ -56,6 +56,20 @@ test('serves the web app, static scripts and the installed model list', async (t
   });
 });
 
+test('serves the board modules and the handwriting font', async (t) => {
+  const { base } = await fixture(t, () => sampleOutline);
+  for (const path of ['/board-math.js', '/board-shapes.js', '/board-layout.js', '/board.js']) {
+    const response = await fetch(base + path);
+    assert.equal(response.status, 200, path);
+    assert.equal(response.headers.get('content-type'), 'text/javascript; charset=utf-8', path);
+  }
+  const font = await fetch(base + '/fonts/caveat.woff2');
+  assert.equal(font.status, 200);
+  assert.match(font.headers.get('content-type'), /^font\/woff2$/);
+  const bytes = new Uint8Array(await font.arrayBuffer());
+  assert.equal(new TextDecoder().decode(bytes.slice(0, 4)), 'wOF2');
+});
+
 test('outline request is schema-constrained and passes topic, notes and level', async (t) => {
   const { base, messages } = await fixture(t, () => sampleOutline);
   const input = { ...userModel, topic: 'How does an RC circuit delay a signal?', notes: 'R = 1 kΩ', level: 'Advanced' };
