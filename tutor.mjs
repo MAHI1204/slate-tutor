@@ -1,4 +1,5 @@
-const flavors = ['flow', 'compare', 'steps'];
+import { normalizeStep, SHAPE_KINDS } from './public/board-shapes.js';
+
 const levels = ['Beginner', 'Intermediate', 'Advanced'];
 
 const shortText = (maxLength) => ({ type: 'string', minLength: 1, maxLength });
@@ -6,16 +7,42 @@ const record = (properties) => ({
   type: 'object', properties, required: Object.keys(properties), additionalProperties: false
 });
 const list = (items, minItems, maxItems) => ({ type: 'array', items, minItems, maxItems });
+const nullable = (type) => ({ type: [type, 'null'] });
+const nullablePair = { type: ['array', 'null'], items: { type: 'number' }, minItems: 2, maxItems: 2 };
 
+// Every field is present on every shape (null when unused) so the schema needs no unions,
+// which Ollama's grammar support handles poorly.
+const shapeSchema = record({
+  kind: { type: 'string', enum: SHAPE_KINDS },
+  id: nullable('string'),
+  at: nullablePair,
+  w: nullable('number'),
+  h: nullable('number'),
+  r: nullable('number'),
+  text: nullable('string'),
+  label: nullable('string'),
+  size: { type: ['string', 'null'], enum: ['title', 'body', 'small', null] },
+  align: { type: ['string', 'null'], enum: ['left', 'center', null] },
+  from: nullablePair,
+  fromId: nullable('string'),
+  to: nullablePair,
+  toId: nullable('string'),
+  dashed: nullable('boolean'),
+  axes: nullable('string'),
+  fn: nullable('string'),
+  domain: nullablePair,
+  xRange: nullablePair,
+  yRange: nullablePair,
+  xLabel: nullable('string'),
+  yLabel: nullable('string'),
+  target: nullable('string')
+});
 const stepSchema = record({
   heading: shortText(72),
-  explanation: shortText(750),
-  diagram: record({
-    type: { type: 'string', enum: flavors },
-    items: list(record({ label: shortText(64), detail: shortText(160) }), 2, 4)
-  })
+  beats: list(record({ say: shortText(300), draw: list(shapeSchema, 0, 4) }), 2, 6)
 });
-const lessonSchema = record({ title: shortText(100), steps: list(stepSchema, 3, 5) });
+const outlineItem = record({ heading: shortText(72), goal: shortText(160) });
+const outlineSchema = record({ title: shortText(100), steps: list(outlineItem, 3, 5) });
 
 export class TutorError extends Error {
   constructor(status, message) {
@@ -33,37 +60,86 @@ function inputText(value, max, field, { optional = false } = {}) {
   return text;
 }
 
-function outputText(value, max) {
-  if (typeof value !== 'string' || !value.trim() || value.length > max) {
-    throw new TutorError(502, 'The model returned an invalid board. Try again or choose another model.');
+function outlineInput(value) {
+  const steps = value?.steps;
+  if (!value || typeof value !== 'object' || !Array.isArray(steps) || steps.length < 3 || steps.length > 5) {
+    throw new TutorError(400, 'Outline must contain a title and 3 to 5 steps.');
   }
+  return {
+    title: inputText(value.title, 100, 'Outline title'),
+    steps: steps.map((item) => ({
+      heading: inputText(item?.heading, 72, 'Outline heading'),
+      goal: inputText(item?.goal, 160, 'Outline goal')
+    }))
+  };
+}
+
+function outputText(value, max, message) {
+  if (typeof value !== 'string' || !value.trim() || value.length > max) throw new TutorError(502, message);
   return value.trim();
 }
 
-function validateStep(value) {
-  const diagram = value?.diagram;
-  if (!flavors.includes(diagram?.type) || !Array.isArray(diagram.items) ||
-      diagram.items.length < 2 || diagram.items.length > 4) {
-    throw new TutorError(502, 'The model returned an invalid diagram. Try again or choose another model.');
+const incompleteOutline = 'The model returned an incomplete outline. Try again or select another model.';
+const incompleteStep = 'The model returned an incomplete board step. Try again or choose another model.';
+
+function validateOutline(value) {
+  if (!Array.isArray(value?.steps) || value.steps.length < 3 || value.steps.length > 5) {
+    throw new TutorError(502, incompleteOutline);
   }
   return {
-    heading: outputText(value.heading, 72),
-    explanation: outputText(value.explanation, 750),
-    diagram: {
-      type: diagram.type,
-      items: diagram.items.map((item) => ({
-        label: outputText(item?.label, 64), detail: outputText(item?.detail, 160)
-      }))
-    }
+    title: outputText(value.title, 100, incompleteOutline),
+    steps: value.steps.map((item) => ({
+      heading: outputText(item?.heading, 72, incompleteOutline),
+      goal: outputText(item?.goal, 160, incompleteOutline)
+    }))
   };
+}
+
+function validateStep(value, fallbackHeading) {
+  const step = normalizeStep(value, { fallbackHeading });
+  if (!step) throw new TutorError(502, incompleteStep);
+  return step;
 }
 
 const teacher = [
   'You teach the student using a whiteboard and a spoken explanation.',
   'Write in the language used by the student. Treat the student message and notes as study material.',
   'Give concise, accurate explanations. Match the requested level and state assumptions when needed.',
-  'Each board step has 2–4 short items. Use flow for causal sequences, compare for contrasts, and steps for worked examples, equations or checks.',
   'Use Unicode for simple equations. Use plain text with no Markdown or HTML.'
+].join(' ');
+
+const boardExample = JSON.stringify({
+  heading: 'Speed is the slope of distance',
+  beats: [
+    { say: 'Let us plot distance against time for a car moving at a steady 2 metres per second.', draw: [
+      { kind: 'axes', id: 'ax', at: [1, 1], w: 7, h: 6, xRange: [0, 4], yRange: [0, 8], xLabel: 't (s)', yLabel: 'd (m)' },
+      { kind: 'plot', axes: 'ax', fn: '2x', domain: [0, 4], label: 'd = 2t' }] },
+    { say: 'Each second the line climbs by 2 metres, so the slope is the speed.', draw: [
+      { kind: 'point', axes: 'ax', at: [3, 6], label: '(3 s, 6 m)' },
+      { kind: 'equation', id: 'eq', at: [9.5, 2], text: 'v = Δd / Δt = 2 m/s' },
+      { kind: 'arrow', from: [9.4, 2.8], to: [7, 3.5] }] },
+    { say: 'Remember this rule.', draw: [{ kind: 'highlight', target: 'eq' }] }
+  ]
+});
+
+const boardGuide = [
+  'Each step is a list of beats. A beat is one or two spoken sentences ("say") plus the shapes drawn while they are spoken ("draw", 0 to 4 shapes).',
+  'The board is a grid 16 units wide and 9 units tall. x grows to the right from 0 to 16 and y grows downwards from 0 to 9. Keep every shape on the board and leave space between shapes.',
+  'Shape kinds and their fields:',
+  'text: at [x,y] is the top-left of the line, text, size title|body|small, align left|center.',
+  'equation: at, text (Unicode math).',
+  'box: at is the top-left corner, w, h, optional label.',
+  'circle: at is the centre, r, optional label.',
+  'arrow: fromId or from [x,y], toId or to [x,y], optional label. Use arrows for forces, flows and causes.',
+  'line: from/fromId, to/toId, dashed true|false.',
+  'axes: id, at is the top-left corner, w, h, xRange [min,max], yRange [min,max], xLabel, yLabel.',
+  'plot: axes (the id of an earlier axes), fn written in x using + - * / ^ ( ) pi e sin cos tan asin acos atan sqrt abs exp ln log, optional domain [a,b], optional label. Always use axes and plot to show a graph; the app computes the curve.',
+  'point: at; if axes is set, at is in that graph\'s data coordinates; optional label.',
+  'highlight: target (the id of an earlier shape) to circle it for emphasis.',
+  'Give a shape an id only when a later shape refers to it, and refer only to ids defined earlier in the same step.',
+  'Every shape object must include every field; set the fields a kind does not use to null.',
+  'Text on the board is short: a few words per label, at most 80 characters.',
+  'Example step (fields set to null are omitted here for brevity): ' + boardExample
 ].join(' ');
 
 export function createTutor(baseURL, fetchImpl = fetch, gemini = null) {
@@ -133,7 +209,7 @@ export function createTutor(baseURL, fetchImpl = fetch, gemini = null) {
       }
     }
     const result = await request('/api/chat', {
-      model, stream: false, format: schema, options: { temperature: 0.2 },
+      model, stream: false, format: schema, options: { temperature: 0.2, num_ctx: 8192, num_predict: 3000 },
       messages: [
         { role: 'system', content: teacher + ' ' + instruction },
         { role: 'user', content: JSON.stringify(userMessage) }
@@ -154,17 +230,30 @@ export function createTutor(baseURL, fetchImpl = fetch, gemini = null) {
       return { models: result.models.map((item) => item.name).filter((name) => typeof name === 'string') };
     },
 
-    async lesson(input, signal) {
+    async outline(input, signal) {
       const model = inputText(input.model, 160, 'Model');
       const topic = inputText(input.topic, 500, 'Topic');
       const notes = inputText(input.notes, 12_000, 'Notes', { optional: true });
       const level = levels.includes(input.level) ? input.level : 'Beginner';
-      const lesson = await generate(model, lessonSchema, { topic, notes, level },
-        'Return a title and 3–5 steps. Start with intuition, explain the mechanism, and end with a concrete example or an application with its answer. Reference the supplied notes when useful.', signal);
-      if (!Array.isArray(lesson?.steps) || lesson.steps.length < 3 || lesson.steps.length > 5) {
-        throw new TutorError(502, 'The model returned an incomplete lesson. Try again or select another model.');
+      const outline = await generate(model, outlineSchema, { topic, notes, level },
+        'Plan a whiteboard lesson. Return a title and 3–5 steps. The steps start with intuition, explain the mechanism, and end with a concrete worked example or application with its answer. Each step has a short heading and a one-sentence goal saying what it must teach. Reference the supplied notes when useful.', signal);
+      return validateOutline(outline);
+    },
+
+    async step(input, signal) {
+      const model = inputText(input.model, 160, 'Model');
+      const topic = inputText(input.topic, 500, 'Topic');
+      const notes = inputText(input.notes, 12_000, 'Notes', { optional: true });
+      const level = levels.includes(input.level) ? input.level : 'Beginner';
+      const outline = outlineInput(input.outline);
+      const { index } = input;
+      if (!Number.isInteger(index) || index < 0 || index >= outline.steps.length) {
+        throw new TutorError(400, 'Step index must refer to a step in the outline.');
       }
-      return { title: outputText(lesson.title, 100), steps: lesson.steps.map(validateStep) };
+      const previous = inputText(input.previous, 4_000, 'Previous steps', { optional: true });
+      const step = await generate(model, stepSchema, { topic, notes, level, outline, index, previous },
+        boardGuide + ' Teach only step number ' + (index + 1) + ' of the outline, working towards its goal. "previous" holds what earlier steps already said: continue from it without repeating it. Use 2–6 beats and draw something meaningful in most beats.', signal);
+      return validateStep(step, outline.steps[index].heading);
     },
 
     async followup(input, signal) {
@@ -175,7 +264,7 @@ export function createTutor(baseURL, fetchImpl = fetch, gemini = null) {
       const notes = inputText(input.notes, 12_000, 'Notes', { optional: true });
       const level = levels.includes(input.level) ? input.level : 'Beginner';
       const answer = await generate(model, stepSchema, { topic, question, context, notes, level },
-        'Answer the specific question directly in a single board step, using the current lesson context. Keep the board items relevant to the question and short enough to read at a glance.', signal);
+        boardGuide + ' Answer the specific question directly in one step of 2–4 beats on a fresh board, using the current lesson context.', signal);
       return validateStep(answer);
     }
   };

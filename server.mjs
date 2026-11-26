@@ -57,8 +57,11 @@ export function createApp({ ollama = 'http://127.0.0.1:11434', gemini = null, fe
           return json(response, 200, { online: false, models: [], message: error.message });
         }
       }
-      if (request.method === 'POST' && path === '/api/lesson') {
-        return json(response, 200, await tutor.lesson(await input(request), client.signal));
+      if (request.method === 'POST' && path === '/api/outline') {
+        return json(response, 200, await tutor.outline(await input(request), client.signal));
+      }
+      if (request.method === 'POST' && path === '/api/step') {
+        return json(response, 200, await tutor.step(await input(request), client.signal));
       }
       if (request.method === 'POST' && path === '/api/followup') {
         return json(response, 200, await tutor.followup(await input(request), client.signal));
