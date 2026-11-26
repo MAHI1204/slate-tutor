@@ -10,6 +10,7 @@ const files = new Map([
   ['/samples.js', ['samples.js', 'text/javascript']],
   ['/board-math.js', ['board-math.js', 'text/javascript']],
   ['/board-shapes.js', ['board-shapes.js', 'text/javascript']],
+  ['/board-layout.js', ['board-layout.js', 'text/javascript']],
   ['/styles.css', ['styles.css', 'text/css']]
 ]);
 
