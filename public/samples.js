@@ -3,6 +3,19 @@ const scene = (heading, explanation, type, ...items) =>
   ({ heading, explanation, diagram: { type, items } });
 
 export const samples = {
+  plant: {
+    title: 'How photosynthesis works',
+    steps: [
+      scene('Follow the energy and the matter', 'A leaf uses light energy to build sugars from carbon dioxide and water. Follow the carbon and the energy separately.', 'compare',
+        item('Energy', 'Light arrives from the Sun'), item('Carbon', 'Carbon dioxide enters through tiny pores in the leaf')),
+      scene('Capture light', 'Inside chloroplasts, pigments absorb light. The light reactions use water and produce oxygen. They also supply ATP and NADPH for the next stage.', 'flow',
+        item('Light absorption', 'Pigments absorb incoming light'), item('Energy transfer', 'The light reactions produce ATP and NADPH')),
+      scene('Build sugar', 'The Calvin cycle uses ATP and NADPH to turn carbon from carbon dioxide into small sugar molecules. The plant can use these to make sucrose or starch.', 'steps',
+        item('Fix carbon', 'Incorporate carbon dioxide into an organic molecule'), item('Make sugar precursors', 'Use energy and reducing power from the light reactions')),
+      scene('Check the oxygen', 'Where did the oxygen released by a leaf come from? It came from water split during the light reactions. The carbon in sugar came from carbon dioxide.', 'compare',
+        item('Released oxygen', 'From water'), item('Carbon in sugar', 'From carbon dioxide'))
+    ]
+  },
   moon: {
     title: 'Why the Moon changes shape',
     steps: [

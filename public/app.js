@@ -5,7 +5,8 @@ const historyKey = 'slate-tutor-history-v1';
 const speech = window.speechSynthesis;
 const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 let saved = readSaved();
-let lesson = saved[0] || makeSample('moon');
+let lesson = null;
+let libraryOpen = false;
 let activeRequest = null;
 let models = [];
 let modelCheck = 0;
@@ -92,6 +93,13 @@ function renderHistory() {
     button.addEventListener('click', () => openLesson(item));
     return button;
   });
+  ui['recent-section'].hidden = !entries.length;
+  ui.recent.replaceChildren(...saved.slice(0, 3).map((item) => {
+    const button = element('button', item.title);
+    button.prepend(element('small', 'Resume · Step ' + (item.cursor + 1)));
+    button.addEventListener('click', () => openLesson(item));
+    return button;
+  }));
   ui.history.replaceChildren(...(entries.length ? entries : [element('p', 'Your generated lessons will appear here.')]));
 }
 
@@ -155,7 +163,8 @@ function renderLesson() {
   renderControls();
   const step = activeStep();
   ui.lesson.hidden = !step;
-  ui.empty.hidden = Boolean(step);
+  ui.home.hidden = Boolean(step) || libraryOpen;
+  ui.library.hidden = !libraryOpen;
   if (!step) return;
   ui['lesson-type'].textContent = lesson.sample ? 'Sample lesson' : lesson.level;
   ui['lesson-title'].textContent = lesson.title;
@@ -194,6 +203,7 @@ function cancelRequest() {
 function openLesson(value) {
   cancelRequest();
   stopPlayback();
+  libraryOpen = false;
   lesson = value;
   ui.followup.value = '';
   status(ui.notice);
@@ -235,6 +245,7 @@ function readAloud(text) {
       stopTalking = null;
       resolve();
     };
+    utterance.lang = { German: 'de-DE', Telugu: 'te-IN' }[lesson.language] || 'en-US';
     utterance.rate = 0.94;
     utterance.onend = done;
     utterance.onerror = (event) => {
@@ -290,12 +301,14 @@ async function createLesson(event) {
   const model = ui.model.value;
   const level = ui.level.value;
   const notes = ui.notes.value.trim();
+  const mode = document.querySelector('input[name="mode"]:checked').value;
+  const language = ui.language.value;
   renderControls();
   status(ui.notice, 'Preparing your whiteboard lesson…');
   try {
-    const response = await api('/api/lesson', { body: { topic, notes, level, model }, signal: request.signal });
+    const response = await api('/api/lesson', { body: { topic, notes, level, model, mode, language }, signal: request.signal });
     if (activeRequest !== request) return;
-    lesson = { ...response, id: crypto.randomUUID(), topic, level, model, notes, cursor: 0 };
+    lesson = { ...response, id: crypto.randomUUID(), topic, level, model, notes, mode, language, cursor: 0 };
     ui.followup.value = '';
     status(ui.notice);
     status(ui['speech-status']);
@@ -331,7 +344,7 @@ async function askTutor(event) {
   status(ui['ask-status'], 'Answering on the whiteboard…');
   try {
     const answer = await api('/api/followup', {
-      body: { topic, level, notes, model, question, context: JSON.stringify(prior) }, signal: request.signal
+      body: { topic, level, notes, model, language: lesson.language, mode: lesson.mode, question, context: JSON.stringify(prior) }, signal: request.signal
     });
     if (activeRequest !== request) return;
     lesson.steps.splice(current + 1, 0, { ...answer, question });
@@ -392,10 +405,29 @@ ui.cancel.addEventListener('click', () => {
   status(ui.notice, 'Request cancelled.');
   if (lesson && !lesson.sample) status(ui['ask-status']);
 });
+ui['library-tab'].addEventListener('click', () => {
+  openLesson(null);
+  libraryOpen = true;
+  renderLesson();
+});
+ui['import-article'].addEventListener('click', async () => {
+  const button = ui['import-article'];
+  button.disabled = true;
+  try {
+    const source = await api('/api/article', {body: {url: ui.article.value.trim()}});
+    const combined = [ui.notes.value.trim(), source.text].filter(Boolean).join('\n\n');
+    if (combined.length > 12000) throw new Error('Shorten your existing notes before importing this article.');
+    ui.notes.value = combined;
+    if (!ui.topic.value.trim()) ui.topic.value = source.title.slice(0, 500);
+    status(ui.notice, 'Introduction added to your notes. Review it before starting.');
+  } catch (error) { status(ui.notice, error.message, true); }
+  finally { button.disabled = false; }
+});
 ui['new-lesson'].addEventListener('click', () => {
   openLesson(null);
   ui.topic.value = '';
   ui.notes.value = '';
+  ui.article.value = '';
   ui['notes-file'].value = '';
   ui['notes-panel'].open = false;
   ui.topic.focus();

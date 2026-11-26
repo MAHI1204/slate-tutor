@@ -47,7 +47,7 @@ async function fixture(t, chooseAnswer) {
 
 test('serves the web app, static scripts and the installed model list', async (t) => {
   const { base } = await fixture(t, () => sampleLesson);
-  assert.match(await (await fetch(base)).text(), /What do you want/);
+  assert.match(await (await fetch(base)).text(), /What shall we unpack/);
   assert.equal((await fetch(base + '/app.js')).status, 200);
   assert.deepEqual(await (await fetch(base + '/api/models')).json(), {
     online: true, models: [userModel.model]
@@ -56,7 +56,7 @@ test('serves the web app, static scripts and the installed model list', async (t
 
 test('passes any topic and study notes to a schema-constrained Ollama chat request', async (t) => {
   const { base, messages } = await fixture(t, () => sampleLesson);
-  const input = { ...userModel, topic: 'How does an RC circuit delay a signal?', notes: 'R = 1 kΩ', level: 'Advanced' };
+  const input = { ...userModel, topic: 'How does an RC circuit delay a signal?', notes: 'R = 1 kΩ', level: 'Advanced', mode: 'Exam', language: 'Telugu' };
   const response = await post(base, '/api/lesson', input);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), sampleLesson);
@@ -64,7 +64,10 @@ test('passes any topic and study notes to a schema-constrained Ollama chat reque
   assert.equal(call.model, input.model);
   assert.equal(call.stream, false);
   assert.deepEqual(call.format.required, ['title', 'steps']);
-  assert.deepEqual(JSON.parse(call.messages[1].content), { topic: input.topic, notes: input.notes, level: input.level });
+  const { teachingGoal, language, ...content } = JSON.parse(call.messages[1].content);
+  assert.match(teachingGoal, /exam practice/);
+  assert.equal(language, input.language);
+  assert.deepEqual(content, { topic: input.topic, notes: input.notes, level: input.level });
 });
 
 test('passes the active whiteboard context when asking a follow-up', async (t) => {
@@ -110,6 +113,7 @@ test('Gemini serves a lesson and a contextual follow-up, keeps the key server-si
     assert.equal(options.headers['x-goog-api-key'], 'fixture-key');
     const prompt = JSON.parse(body.contents[0].parts[0].text);
     calls.push(prompt);
+    if (prompt.topic === 'unavailable') return new Response(null, { status: 503 });
     if (prompt.topic === 'quota') return new Response(null, { status: 429 });
     const content = body.generationConfig.responseJsonSchema.properties.steps ? sampleLesson : sampleStep;
     return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify(content) }] } }] });
@@ -118,6 +122,20 @@ test('Gemini serves a lesson and a contextual follow-up, keeps the key server-si
   assert.deepEqual(await (await fetch(base + '/api/models')).json(), { online: true, provider: 'gemini', models: [model] });
   assert.deepEqual(await (await post(base, '/api/lesson', { model, topic: 'RC delay' })).json(), sampleLesson);
   assert.deepEqual(await (await post(base, '/api/followup', { model, topic: 'RC delay', context: 'charging', question: 'Why?' })).json(), sampleStep);
+  const unavailable = await post(base, '/api/lesson', { model, topic: 'unavailable' });
+  assert.equal(unavailable.status, 503);
+  assert.match((await unavailable.json()).error, /temporarily unavailable/);
   assert.equal(calls[1].context, 'charging');
   assert.equal((await post(base, '/api/lesson', { model, topic: 'quota' })).status, 429);
+});
+
+test('imports the introduction from an English Wikipedia article', async (t) => {
+  const base = await start(createApp({ fetchImpl: async (url) => {
+    assert.equal(url.hostname, 'en.wikipedia.org');
+    assert.equal(url.searchParams.get('titles'), 'Photosynthesis');
+    return Response.json({ query: { pages: [{ title: 'Photosynthesis', extract: 'Leaf biology.' }] } });
+  } }), t);
+  const url = 'https://en.wikipedia.org/wiki/Photosynthesis';
+  assert.match((await (await post(base, '/api/article', { url })).json()).text, /Leaf biology/);
+  assert.equal((await post(base, '/api/article', { url: 'https://example.org' })).status, 400);
 });
