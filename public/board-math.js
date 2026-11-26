@@ -49,10 +49,12 @@ function parse(tokens) {
     return left;
   }
 
+  // 2x, 2(x+1), (x+1)(x-1), x(x+1), 2pi x, x sin(x): a value followed by a name or "(".
   function startsImplicitFactor() {
     const next = peek();
     if (!next || !previous) return false;
-    const afterValue = previous.type === 'number' || previous.type === ')';
+    const afterValue = previous.type === 'number' || previous.type === ')' ||
+      (previous.type === 'name' && (previous.value === 'x' || constants.has(previous.value)));
     return afterValue && (next.type === 'name' || next.type === '(');
   }
 
@@ -129,9 +131,16 @@ function parse(tokens) {
   return result;
 }
 
+// Models often write math the way it is printed. Map those spellings to the grammar.
+function normalize(source) {
+  return source.toLowerCase()
+    .replace(/π/g, 'pi').replace(/²/g, '^2').replace(/³/g, '^3')
+    .replace(/[−–]/g, '-').replace(/[×·⋅]/g, '*');
+}
+
 export function parseExpression(source) {
   if (typeof source !== 'string') return { ok: false, error: 'Expression must be text.' };
-  const text = source.trim();
+  const text = normalize(source.trim());
   if (!text) return { ok: false, error: 'Expression is empty.' };
   if (source.length > MAX_LENGTH) return { ok: false, error: 'Expression is too long.' };
   try {
@@ -139,6 +148,15 @@ export function parseExpression(source) {
   } catch (error) {
     return { ok: false, error: error.message };
   }
+}
+
+// True when the curve between two samples jumps through an asymptote: from above the range
+// to below it (or back), or a large jump whose midpoint lies outside the two values.
+function crossesPole(evaluate, x0, y0, x1, y1, yMin, yMax) {
+  if ((y0 >= yMax && y1 <= yMin) || (y0 <= yMin && y1 >= yMax)) return true;
+  if (Math.abs(y1 - y0) <= (yMax - yMin) / 2) return false;
+  const middle = evaluate((x0 + x1) / 2);
+  return !Number.isFinite(middle) || middle < Math.min(y0, y1) || middle > Math.max(y0, y1);
 }
 
 // Samples a function into polyline segments in data coordinates. A segment ends at an
@@ -151,6 +169,7 @@ export function sampleFunction(evaluate, [a, b], [yMin, yMax], samples = 200) {
   const segments = [];
   let current = [];
   let previousY = null;
+  let previousX = null;
   const close = () => {
     if (current.length >= 2) segments.push(current);
     current = [];
@@ -163,9 +182,10 @@ export function sampleFunction(evaluate, [a, b], [yMin, yMax], samples = 200) {
       close();
       continue;
     }
-    if (previousY !== null && ((previousY > yMax && y < yMin) || (previousY < yMin && y > yMax))) close();
+    if (previousY !== null && crossesPole(evaluate, previousX, previousY, x, y, yMin, yMax)) close();
     current.push([x, Math.min(high, Math.max(low, y))]);
     previousY = y;
+    previousX = x;
   }
   close();
   return segments;

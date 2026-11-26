@@ -92,6 +92,10 @@ test('step request carries outline, index and previous lines, and sets Ollama co
   const [call] = messages;
   assert.deepEqual(call.format.required, ['heading', 'beats']);
   assert.deepEqual(call.options, { temperature: 0.2, num_ctx: 8192, num_predict: 3000 });
+  const shape = call.format.properties.beats.items.properties.draw.items.properties;
+  assert.deepEqual(shape.size, { type: 'string', enum: ['title', 'body', 'small'] });
+  assert.deepEqual(shape.align, { type: 'string', enum: ['left', 'center'] });
+  assert.ok(!JSON.stringify(call.format).includes('"enum":[null') && !/,null\]/.test(JSON.stringify(call.format)));
   const sent = JSON.parse(call.messages[1].content);
   assert.deepEqual(sent.outline, sampleOutline);
   assert.equal(sent.index, 1);

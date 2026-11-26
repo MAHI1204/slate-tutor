@@ -347,6 +347,9 @@ async function playFrom(stepIndex, beat, { untilEndOfStep = false, continuing = 
     lesson.cursor = stepIndex;
     let step = lesson.steps[stepIndex];
     if (!isReady(step)) {
+      // No beat of this step has started: a pause now must not resume into the previous step.
+      current.stepIndex = stepIndex;
+      current.beat = -1;
       renderLesson();
       status(ui['speech-status'], 'Drawing the next step…');
       const result = await Promise.race([stepReady(step), released]);
@@ -459,7 +462,7 @@ function previousLines(target, step) {
 
 function afterStepChange(target, index) {
   if (target !== lesson) return;
-  if (index === lesson.cursor && !playback && !resumePoint) renderLesson();
+  if (index === lesson.cursor && !playback && resumePoint?.stepIndex !== index) renderLesson();
   else {
     renderControls();
     renderOutline();

@@ -21,8 +21,9 @@ const shapeSchema = record({
   r: nullable('number'),
   text: nullable('string'),
   label: nullable('string'),
-  size: { type: ['string', 'null'], enum: ['title', 'body', 'small', null] },
-  align: { type: ['string', 'null'], enum: ['left', 'center', null] },
+  // Plain string enums: Gemini's schema subset does not document null inside an enum.
+  size: { type: 'string', enum: ['title', 'body', 'small'] },
+  align: { type: 'string', enum: ['left', 'center'] },
   from: nullablePair,
   fromId: nullable('string'),
   to: nullablePair,
@@ -137,7 +138,7 @@ const boardGuide = [
   'point: at; if axes is set, at is in that graph\'s data coordinates; optional label.',
   'highlight: target (the id of an earlier shape) to circle it for emphasis.',
   'Give a shape an id only when a later shape refers to it, and refer only to ids defined earlier in the same step.',
-  'Every shape object must include every field; set the fields a kind does not use to null.',
+  'Every shape object must include every field; set the fields a kind does not use to null, except size and align, which always need a value (use body and left when the kind does not use them).',
   'Text on the board is short: a few words per label, at most 80 characters.',
   'Example step (fields set to null are omitted here for brevity): ' + boardExample
 ].join(' ');

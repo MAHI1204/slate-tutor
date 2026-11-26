@@ -178,7 +178,8 @@ function normalizeShape(raw, seen) {
       break;
     }
   }
-  const id = identifier(raw.id);
+  // Highlights are not targets: an arrow or highlight pointing at one has nowhere to go.
+  const id = kind === 'highlight' ? undefined : identifier(raw.id);
   if (id !== undefined && !seen.has(id)) {
     shape.id = id;
     seen.set(id, shape);
@@ -249,14 +250,43 @@ function legacyShapes(type, items) {
   });
 }
 
+// Splits text into chunks of at most LIMITS.say characters, at sentence ends where
+// possible and otherwise at spaces, so old explanations (up to 750 characters) survive.
+function chunkText(text) {
+  const words = String(text ?? '').trim().split(/\s+/).filter(Boolean);
+  const chunks = [];
+  let current = '';
+  for (const word of words) {
+    const candidate = current ? current + ' ' + word : word;
+    if ([...candidate].length <= LIMITS.say) {
+      current = candidate;
+      continue;
+    }
+    // Prefer to break after the last full sentence in the current chunk.
+    const sentenceEnd = current.search(/[.!?](?=[^.!?]*$)/);
+    if (sentenceEnd > 0 && sentenceEnd < current.length - 1) {
+      chunks.push(current.slice(0, sentenceEnd + 1));
+      current = current.slice(sentenceEnd + 1).trim() + ' ' + word;
+    } else {
+      if (current) chunks.push(current);
+      current = word;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
 export function legacyToBeats(step) {
   const items = (Array.isArray(step?.diagram?.items) ? step.diagram.items : [])
     .map((item) => ({ label: String(item?.label ?? ''), detail: String(item?.detail ?? '') }));
   const type = ['flow', 'compare', 'steps'].includes(step?.diagram?.type) ? step.diagram.type : 'steps';
   const shapes = legacyShapes(type, items);
-  const beats = items.map((item, i) => ({
-    say: i === 0 ? (step.explanation || step.heading) : item.label + '. ' + item.detail,
-    draw: shapes[i]
-  }));
+  const chunks = chunkText(step?.explanation || step?.heading);
+  const beats = chunks.map((say, i) => ({ say, draw: i === 0 ? shapes[0] ?? [] : [] }));
+  const itemBeats = items.slice(1).map((item, i) => ({ say: item.label + '. ' + item.detail, draw: shapes[i + 1] }));
+  const room = Math.max(0, LIMITS.beats - beats.length);
+  beats.push(...itemBeats.slice(0, room));
+  // In the rare case that there is no room left, the remaining items' shapes join the last beat.
+  for (const extra of itemBeats.slice(room)) beats[beats.length - 1].draw.push(...extra.draw);
   return normalizeStep({ heading: step?.heading, question: step?.question, beats });
 }

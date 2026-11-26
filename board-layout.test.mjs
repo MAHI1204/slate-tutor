@@ -82,9 +82,23 @@ test('plot and data point follow their axes when the axes are nudged', () => {
   const axes = byId(result, 'a');
   nearBox(axes.box, { x: 7.5, y: 2, w: 5, h: 4 });
   nearBox(byId(result, 'p').box, axes.box);
-  nearBox(byId(result, 'q').box, axes.box);
   const [gx, gy] = dataPoint(axes, [5, 2]);
   near(gx, 10); near(gy, 4);
+  const point = byId(result, 'q');
+  assert.ok(point.box.x <= gx && point.box.x + point.box.w >= gx && point.box.y <= gy && point.box.y + point.box.h >= gy);
+  assert.ok(point.box.w < 1.5);
+});
+
+test('arrows and highlights aimed at a point on a graph attach to the point, not the graph', () => {
+  const result = layoutStep([
+    { kind: 'axes', id: 'ax', at: [1, 1], w: 8, h: 6, xRange: [0, 4], yRange: [0, 16] },
+    { kind: 'point', id: 'p', axes: 'ax', at: [2, 4], label: 'P' },
+    { kind: 'text', id: 't', at: [11, 2], text: 'here', size: 'body', align: 'left' },
+    { kind: 'arrow', id: 'r', from: 't', to: 'p' },
+    { kind: 'highlight', id: 'h', target: 'p' }], measure);
+  const [, end] = byId(result, 'r').points;
+  assert.ok(Math.hypot(end[0] - 5, end[1] - 5.5) < 0.3, String(end));
+  assert.ok(byId(result, 'h').box.w < 2, JSON.stringify(byId(result, 'h').box));
 });
 
 test('highlight wraps its target with padding', () => {

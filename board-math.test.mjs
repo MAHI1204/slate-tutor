@@ -60,3 +60,27 @@ test('a smooth function on its domain is one segment with samples + 1 points', (
   assert.equal(segs[0].length, 51);
   assert.deepEqual(segs[0][0], [-2, 4]);
 });
+
+test('splits at a pole even when the samples next to it are inside a wide y-range', () => {
+  const straddles = (segs, poles) => segs.some((s) => poles.some((pole) => s[0][0] < pole && s[s.length - 1][0] > pole));
+  const tan = sampleFunction(parseExpression('tan(x)').evaluate, [-5, 5], [-50, 50]);
+  assert.equal(straddles(tan, [-1.5, -0.5, 0.5, 1.5].map((k) => k * Math.PI)), false);
+  const inv = sampleFunction(parseExpression('1/x').evaluate, [-1, 2], [-100, 100]);
+  assert.equal(straddles(inv, [0]), false);
+  assert.ok(inv.length >= 2);
+  const smooth = sampleFunction(parseExpression('exp(x)').evaluate, [0, 10], [0, 30000]);
+  assert.equal(smooth.length, 1);
+});
+
+test('accepts the Unicode and implicit-multiplication spellings models commonly write', () => {
+  assert.equal(ev('x²', 3), 9);
+  assert.equal(ev('x³ − 1', 2), 7);
+  assert.ok(Math.abs(ev('2π', 0) - 2 * Math.PI) < 1e-12);
+  assert.equal(ev('2×x', 3), 6);
+  assert.equal(ev('2·x', 3), 6);
+  assert.equal(ev('X^2', 2), 4);
+  assert.equal(ev('x(x+1)', 2), 6);
+  assert.ok(Math.abs(ev('2pi x', 1) - 2 * Math.PI) < 1e-12);
+  assert.equal(ev('x sin(x)', 0), 0);
+  for (const bad of ['sin x', 'foo(x)', '2**3']) assert.equal(parseExpression(bad).ok, false, bad);
+});

@@ -156,3 +156,25 @@ test('converts old diagram steps, keeping question, and the result survives norm
   const steps = legacyToBeats({ ...old, diagram: { ...old.diagram, type: 'steps' } });
   assert.ok(steps.beats.flatMap((b) => b.draw).some((s) => s.kind === 'text' && s.text.startsWith('1. A')));
 });
+
+test('arrows cannot target a highlight', () => {
+  const step = normalizeStep({ heading: 'h', beats: [{ say: 's', draw: [
+    raw({ kind: 'box', id: 'b', at: [1, 1], w: 2, h: 1 }),
+    raw({ kind: 'highlight', id: 'hl', target: 'b' }),
+    raw({ kind: 'arrow', from: [14, 8], toId: 'hl' })] }] });
+  assert.deepEqual(step.beats[0].draw.map((s) => s.kind), ['box', 'highlight']);
+  assert.equal(step.beats[0].draw[1].id, undefined);
+});
+
+test('converting an old lesson keeps its whole explanation', () => {
+  const sentence = 'This sentence explains one more part of the idea in some detail. ';
+  const explanation = sentence.repeat(13).trim();
+  assert.ok(explanation.length > 750);
+  const step = legacyToBeats({ heading: 'Long', explanation, diagram: { type: 'flow',
+    items: [{ label: 'A', detail: 'a' }, { label: 'B', detail: 'b' }, { label: 'C', detail: 'c' }] } });
+  assert.ok(step.explanation.startsWith(explanation), step.explanation.slice(0, 80));
+  assert.ok(!step.beats.some((b) => b.say.endsWith('…')));
+  assert.ok(step.beats.every((b) => [...b.say].length <= 300));
+  assert.equal(step.beats.flatMap((b) => b.draw).filter((s) => s.kind === 'box').length, 3);
+  assert.deepEqual(normalizeStep(step), step);
+});

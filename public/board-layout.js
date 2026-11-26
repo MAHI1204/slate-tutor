@@ -58,8 +58,11 @@ export function dataPoint(axes, [px, py]) {
   return [x + ((px - x0) / (x1 - x0)) * w, y + h - ((py - y0) / (y1 - y0)) * h];
 }
 
+const POINT_RADIUS = 0.12;
+
 function center(shape) {
   if (shape.kind === 'circle') return shape.at;
+  if (shape.kind === 'point') return shape.dot;
   const { x, y, w, h } = shape.box;
   return [x + w / 2, y + h / 2];
 }
@@ -71,8 +74,8 @@ function edgePoint(shape, toward) {
   const dy = toward[1] - c[1];
   const length = Math.hypot(dx, dy);
   if (length === 0) return c;
-  if (shape.kind === 'circle') {
-    const t = Math.min(1, shape.r / length);
+  if (shape.kind === 'circle' || shape.kind === 'point') {
+    const t = Math.min(1, (shape.kind === 'circle' ? shape.r : POINT_RADIUS) / length);
     return [c[0] + dx * t, c[1] + dy * t];
   }
   const halfW = shape.box.w / 2;
@@ -122,12 +125,16 @@ export function layoutStep(shapes, measure) {
     const dy = final.y - box.y;
     if (dx || dy) shape.at = [shape.at[0] + dx, shape.at[1] + dy];
     shape.box = final;
+    if (shape.kind === 'point') shape.dot = [shape.at[0], shape.at[1]];
     placedSolids.push(shape);
   }
 
+  // Plots cover their axes; a point on a graph sits at its data position.
   for (const shape of result) {
-    if (shape.kind === 'plot' || (shape.kind === 'point' && shape.axes)) {
-      shape.box = { ...byId.get(shape.axes).box };
+    if (shape.kind === 'plot') shape.box = { ...byId.get(shape.axes).box };
+    if (shape.kind === 'point' && shape.axes) {
+      shape.dot = dataPoint(byId.get(shape.axes), shape.at);
+      shape.box = solidBox({ ...shape, at: shape.dot }, measure);
     }
   }
 
