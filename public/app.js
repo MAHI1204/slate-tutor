@@ -13,6 +13,7 @@ let activeRequest = null;
 let models = [];
 let modelCheck = 0;
 let playback = null;
+let resumePoint = null;
 let speechTimer;
 let stopTalking;
 let recognition;
@@ -111,10 +112,27 @@ function stopVoice() {
   if (speech) speech.cancel();
 }
 
+// Pauses: the board keeps every beat drawn so far (the current one is completed) and
+// Play resumes from the next beat.
 function stopPlayback() {
+  const current = playback;
   playback = null;
+  current?.drawing?.finish();
   stopVoice();
+  if (current) resumePoint = { lesson, stepIndex: current.stepIndex, beat: current.beat };
   renderControls();
+}
+
+// Stops playback for good (navigation, new lesson, follow-up): Play starts the step over.
+function haltPlayback() {
+  stopPlayback();
+  resumePoint = null;
+}
+
+function highlightBeat(index) {
+  for (const span of ui.explanation.querySelectorAll('span[data-beat]')) {
+    span.dataset.active = String(Number(span.dataset.beat) === index);
+  }
 }
 
 function renderControls() {
@@ -125,6 +143,7 @@ function renderControls() {
   ui.back.disabled = busy || !lesson || lesson.cursor === 0;
   ui.next.disabled = busy || !lesson || lesson.cursor === lesson.steps.length - 1;
   ui.play.disabled = busy || !lesson;
+  ui.replay.disabled = busy || !lesson;
   ui.play.textContent = playback ? 'Pause lesson' : 'Play lesson';
 }
 
@@ -142,7 +161,7 @@ function renderTranscript(step) {
   ui.explanation.replaceChildren(...spans.flatMap((span, index) => (index ? [' ', span] : [span])));
 }
 
-function renderLesson() {
+function renderLesson(boardMode = 'full') {
   renderHistory();
   renderControls();
   const step = activeStep();
@@ -161,7 +180,7 @@ function renderLesson() {
   }
   ui.followup.disabled = Boolean(lesson.sample);
   ui['ask-mic'].disabled = Boolean(lesson.sample);
-  renderBoard(step);
+  if (boardMode === 'full') renderBoard(step);
   const steps = lesson.steps.map(({ heading, question }, index) => {
     const row = element('li');
     const button = element('button');
@@ -185,7 +204,7 @@ function cancelRequest() {
 
 function openLesson(value) {
   cancelRequest();
-  stopPlayback();
+  haltPlayback();
   lesson = value;
   ui.followup.value = '';
   status(ui.notice);
@@ -194,7 +213,7 @@ function openLesson(value) {
 }
 
 function moveTo(index) {
-  stopPlayback();
+  haltPlayback();
   lesson.cursor = index;
   saveLesson();
   renderLesson();
@@ -212,10 +231,10 @@ function hold(milliseconds) {
   });
 }
 
-function readAloud(text) {
+function readAloud(text, fallbackMs) {
   if (!speech || !ui.narration.checked || !speech.getVoices().length) {
     if (ui.narration.checked) status(ui['speech-status'], 'No browser voice is available. Follow the written explanation.');
-    return hold(1400);
+    return hold(fallbackMs);
   }
   return new Promise((resolve) => {
     const utterance = new SpeechSynthesisUtterance(text);
@@ -241,20 +260,65 @@ function readAloud(text) {
   });
 }
 
-async function playFromHere() {
-  const run = Symbol();
-  playback = run;
+function beatDuration(say, shapes) {
+  const words = say.split(/\s+/).filter(Boolean).length;
+  return Math.max((words / 2.6) * 1000, 600 * shapes, 1200);
+}
+
+// Plays from a beat: each beat's shapes are drawn while its sentence is narrated, and the
+// next beat starts when both have finished. Runs on through later steps unless
+// untilEndOfStep is set (Replay step). `continuing` means the board already shows the
+// earlier beats of this step (resuming after a pause).
+async function playFrom(stepIndex, beat, { untilEndOfStep = false, continuing = false } = {}) {
+  const run = Symbol('playback');
+  const current = { run, stepIndex, beat, drawing: null };
+  playback = current;
+  resumePoint = null;
   status(ui['speech-status']);
-  while (playback === run) {
-    renderLesson();
-    const step = activeStep();
-    await readAloud(step.explanation);
-    if (playback !== run) return;
-    if (lesson.cursor === lesson.steps.length - 1) break;
-    lesson.cursor += 1;
+  renderControls();
+  let redraw = !continuing;
+  while (playback === current) {
+    lesson.cursor = stepIndex;
+    const step = lesson.steps[stepIndex];
+    if (redraw) {
+      renderLesson('none');
+      await board.show(step, beat - 1);
+      if (playback !== current) return;
+    }
+    redraw = true;
+    for (let index = beat; index < step.beats.length; index += 1) {
+      current.stepIndex = stepIndex;
+      current.beat = index;
+      highlightBeat(index);
+      const { say, draw } = step.beats[index];
+      const duration = beatDuration(say, draw.length);
+      current.drawing = board.drawBeat(index, duration);
+      await Promise.all([readAloud(say, duration), current.drawing.done]);
+      if (playback !== current) return;
+    }
+    if (untilEndOfStep || stepIndex >= lesson.steps.length - 1) break;
+    stepIndex += 1;
+    beat = 0;
+    lesson.cursor = stepIndex;
     saveLesson();
   }
-  if (playback === run) stopPlayback();
+  if (playback === current) {
+    playback = null;
+    highlightBeat(-1);
+    renderControls();
+  }
+}
+
+function play() {
+  const step = activeStep();
+  if (!step) return;
+  const point = resumePoint;
+  resumePoint = null;
+  if (point && point.lesson === lesson && point.stepIndex === lesson.cursor) {
+    if (point.beat + 1 < step.beats.length) return playFrom(lesson.cursor, point.beat + 1, { continuing: true });
+    if (lesson.cursor < lesson.steps.length - 1) return playFrom(lesson.cursor + 1, 0);
+  }
+  return playFrom(lesson.cursor, 0);
 }
 
 async function createLesson(event) {
@@ -268,7 +332,7 @@ async function createLesson(event) {
     status(ui.notice, 'Set GEMINI_API_KEY on the server and restart it, or start Ollama and select Refresh. You can try a sample lesson now.', true);
     return;
   }
-  stopPlayback();
+  haltPlayback();
   const request = new AbortController();
   activeRequest = request;
   const model = ui.model.value;
@@ -302,7 +366,7 @@ async function askTutor(event) {
     status(ui['ask-status'], 'This board has reached 45 steps. Start a new lesson to continue.');
     return;
   }
-  stopPlayback();
+  haltPlayback();
   const request = new AbortController();
   activeRequest = request;
   const current = lesson.cursor;
@@ -389,7 +453,12 @@ for (const button of document.querySelectorAll('[data-sample]')) {
 }
 ui.back.addEventListener('click', () => moveTo(lesson.cursor - 1));
 ui.next.addEventListener('click', () => moveTo(lesson.cursor + 1));
-ui.play.addEventListener('click', () => playback ? stopPlayback() : playFromHere());
+ui.play.addEventListener('click', () => (playback ? stopPlayback() : play()));
+ui.replay.addEventListener('click', () => {
+  if (!activeStep()) return;
+  haltPlayback();
+  playFrom(lesson.cursor, 0, { untilEndOfStep: true });
+});
 ui.narration.addEventListener('change', () => {
   if (!ui.narration.checked) {
     stopVoice();
