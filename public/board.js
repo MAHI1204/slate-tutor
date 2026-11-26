@@ -91,7 +91,11 @@ function arrowHead(rand, [x1, y1], [x2, y2], size = 20) {
 
 const px = ([x, y]) => [x * UNIT, y * UNIT];
 
+// Several boards can share a page (the cumulative slate), so clip ids carry a board number.
+let boardCount = 0;
+
 export function createBoard(svg, { reducedMotion = false } = {}) {
+  const boardId = ++boardCount;
   let token = 0;
   let beats = [];
   let running = [];
@@ -130,7 +134,7 @@ export function createBoard(svg, { reducedMotion = false } = {}) {
     }, parent);
     element.textContent = text;
     const left = align === 'center' ? x - metrics.w / 2 : x;
-    const clipId = 'board-clip-' + token + '-' + clipCount++;
+    const clipId = 'board-' + boardId + '-clip-' + token + '-' + clipCount++;
     const clip = node('clipPath', { id: clipId, clipPathUnits: 'userSpaceOnUse' }, defs);
     const rect = node('rect', { x: f(left - 6), y: f(top - 8), width: f(metrics.w + 12), height: f(metrics.h + 16) }, clip);
     element.setAttribute('clip-path', 'url(#' + clipId + ')');
@@ -217,7 +221,7 @@ export function createBoard(svg, { reducedMotion = false } = {}) {
           .map((segment) => segment.map((p) => px(dataPoint(axes, p))));
         if (!segments.length) break;
         const d = segments.map((segment) => segment.map(([sx, sy], i) => (i ? 'L' : 'M') + f(sx) + ' ' + f(sy)).join(' ')).join(' ');
-        const clipId = 'board-plot-' + token + '-' + clipCount++;
+        const clipId = 'board-' + boardId + '-plot-' + token + '-' + clipCount++;
         const clip = node('clipPath', { id: clipId, clipPathUnits: 'userSpaceOnUse' }, defs);
         const { x, y, w, h } = axes.box;
         node('rect', { x: x * UNIT - 4, y: y * UNIT - 4, width: w * UNIT + 8, height: h * UNIT + 8 }, clip);

@@ -8,7 +8,8 @@ const speech = window.speechSynthesis;
 const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const board = createBoard(ui['board-svg'], { reducedMotion: window.matchMedia('(prefers-reduced-motion: reduce)').matches });
 let saved = readSaved();
-let lesson = saved[0] || makeSample('moon');
+let lesson = null;
+let libraryOpen = false;
 let activeRequest = null;
 let generation = null;
 let unloading = false;
@@ -111,6 +112,13 @@ function renderHistory() {
     button.addEventListener('click', () => openLesson(item));
     return button;
   });
+  ui['recent-section'].hidden = !entries.length;
+  ui.recent.replaceChildren(...saved.slice(0, 3).map((item) => {
+    const button = element('button', item.title);
+    button.prepend(element('small', 'Resume · Step ' + (item.cursor + 1)));
+    button.addEventListener('click', () => openLesson(item));
+    return button;
+  }));
   ui.history.replaceChildren(...(entries.length ? entries : [element('p', 'Your generated lessons will appear here.')]));
 }
 
@@ -168,12 +176,59 @@ function renderControls() {
   const generating = Boolean(generation);
   ui.generate.disabled = busy || generating;
   ui.cancel.hidden = !busy && !generating;
+  ui['stop-generation'].hidden = !(generation && generation.lesson === lesson);
   ui.ask.disabled = busy || generating || Boolean(lesson?.sample) || !isReady(activeStep());
   ui.back.disabled = busy || !lesson || lesson.cursor === 0;
   ui.next.disabled = busy || !lesson || lesson.cursor === lesson.steps.length - 1;
   ui.play.disabled = busy || !lesson;
   ui.replay.disabled = busy || !isReady(activeStep());
   ui.play.textContent = playback ? 'Pause lesson' : 'Play lesson';
+}
+
+function addCheck(sheet, check) {
+  if (!check) return;
+  const details = element('details', '', 'knowledge-check');
+  details.append(element('summary', check.question), element('p', check.answer));
+  sheet.append(details);
+}
+
+// Earlier steps stay on the slate above the current one, drawn in full. They are rebuilt
+// only when the cursor or their readiness changes, so redraws during playback stay cheap.
+let priorKey = '';
+function renderPrior() {
+  const before = lesson.steps.slice(0, lesson.cursor);
+  const key = [lesson.id || lesson.title, lesson.cursor, before.map((part) => (isReady(part) ? 'r' : part.failed ? 'f' : 'p')).join('')].join('|');
+  if (key === priorKey) return false;
+  priorKey = key;
+  const sheets = before.map((part, index) => {
+    const sheet = element('article', '', 'sheet prior');
+    sheet.append(element('h3', (index + 1) + '. ' + part.heading));
+    if (isReady(part)) {
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('class', 'board-svg');
+      svg.setAttribute('viewBox', '0 0 1600 900');
+      svg.setAttribute('role', 'img');
+      const priorBoard = createBoard(svg, { reducedMotion: true });
+      svg.setAttribute('aria-label', priorBoard.describe(part));
+      priorBoard.show(part, part.beats.length - 1);
+      sheet.append(svg, element('p', part.explanation));
+      addCheck(sheet, part.check);
+    } else {
+      sheet.append(element('p', part.failed ? 'Not drawn yet. Use Retry in the outline.' : 'Preparing this step…', 'sheet-state'));
+    }
+    return sheet;
+  });
+  ui.prior.replaceChildren(...sheets);
+  return true;
+}
+
+function scrollToCurrent() {
+  ui.viewport.scrollTop += ui.current.getBoundingClientRect().top - ui.viewport.getBoundingClientRect().top - 12;
+}
+
+function renderCheck(step) {
+  ui.current.querySelector('.knowledge-check')?.remove();
+  if (isReady(step)) addCheck(ui.current, step.check);
 }
 
 function renderBoard(step) {
@@ -201,11 +256,12 @@ function renderLesson(boardMode = 'full') {
   renderControls();
   const step = activeStep();
   ui.lesson.hidden = !step;
-  ui.empty.hidden = Boolean(step);
+  ui.home.hidden = Boolean(step) || libraryOpen;
+  ui.library.hidden = !libraryOpen;
   if (!step) return;
   ui['lesson-type'].textContent = lesson.sample ? 'Sample lesson' : lesson.level;
   ui['lesson-title'].textContent = lesson.title;
-  ui['step-title'].textContent = step.heading;
+  ui['step-title'].textContent = (lesson.cursor + 1) + '. ' + step.heading;
   ui.counter.textContent = 'Step ' + (lesson.cursor + 1) + ' of ' + lesson.steps.length;
   renderTranscript(step);
   if (lesson.sample) {
@@ -224,6 +280,8 @@ function renderLesson(boardMode = 'full') {
       ui['board-svg'].setAttribute('aria-label', step.failed ? 'This step could not be drawn.' : 'Preparing this step.');
     }
   }
+  renderCheck(step);
+  if (renderPrior()) requestAnimationFrame(scrollToCurrent);
   renderOutline();
 }
 
@@ -263,6 +321,7 @@ function cancelRequest() {
 function openLesson(value) {
   cancelRequest();
   haltPlayback();
+  libraryOpen = false;
   lesson = value;
   ui.followup.value = '';
   status(ui.notice);
@@ -305,7 +364,8 @@ function readAloud(text, fallbackMs) {
       stopTalking = null;
       resolve();
     };
-    utterance.rate = 0.94;
+    utterance.lang = { German: 'de-DE', Telugu: 'te-IN' }[lesson.language] || 'en-US';
+    utterance.rate = Number(ui.speed.value);
     utterance.onend = done;
     utterance.onerror = (event) => {
       if (!['canceled', 'interrupted'].includes(event.error)) {
@@ -321,7 +381,7 @@ function readAloud(text, fallbackMs) {
 
 function beatDuration(say, shapes) {
   const words = say.split(/\s+/).filter(Boolean).length;
-  return Math.max((words / 2.6) * 1000, 600 * shapes, 1200);
+  return Math.max((words / 2.6) * 1000, 600 * shapes, 1200) / Number(ui.speed.value);
 }
 
 // Plays from a beat: each beat's shapes are drawn while its sentence is narrated, and the
@@ -380,7 +440,7 @@ async function playFrom(stepIndex, beat, { untilEndOfStep = false, continuing = 
       await Promise.all([readAloud(say, duration), current.drawing.done]);
       if (playback !== current) return;
     }
-    if (untilEndOfStep || stepIndex >= lesson.steps.length - 1) break;
+    if (untilEndOfStep || ui.pace.value === 'interactive' || stepIndex >= lesson.steps.length - 1) break;
     stepIndex += 1;
     beat = 0;
     lesson.cursor = stepIndex;
@@ -423,15 +483,17 @@ async function createLesson(event) {
   const model = ui.model.value;
   const level = ui.level.value;
   const notes = ui.notes.value.trim();
+  const mode = document.querySelector('input[name="mode"]:checked').value;
+  const language = ui.language.value;
   renderControls();
   status(ui.notice, 'Planning your lesson…');
   let created = null;
   try {
-    const outline = await api('/api/outline', { body: { topic, notes, level, model }, signal: request.signal });
+    const outline = await api('/api/outline', { body: { topic, notes, level, model, mode, language }, signal: request.signal });
     if (activeRequest !== request) return;
     haltPlayback();
     lesson = {
-      id: crypto.randomUUID(), title: outline.title, topic, level, model, notes, cursor: 0,
+      id: crypto.randomUUID(), title: outline.title, topic, level, model, notes, mode, language, cursor: 0,
       steps: outline.steps.map(({ heading, goal }) => ({ heading, goal, pending: true }))
     };
     created = lesson;
@@ -476,14 +538,14 @@ async function runQueue(target) {
   const controller = new AbortController();
   generation = { lesson: target, controller };
   if (target === lesson) renderLesson(playback || resumePoint ? 'none' : 'full');
-  const { topic, notes, level, model } = target;
+  const { topic, notes, level, model, mode, language } = target;
   try {
     for (let step = target.steps.find((item) => item.pending && !item.failed); step;
       step = target.steps.find((item) => item.pending && !item.failed)) {
       const { steps, outline } = outlineFor(target);
       try {
         const result = await api('/api/step', {
-          body: { topic, notes, level, model, outline, index: steps.indexOf(step), previous: previousLines(target, step) },
+          body: { topic, notes, level, model, mode, language, outline, index: steps.indexOf(step), previous: previousLines(target, step) },
           signal: controller.signal
         });
         const index = target.steps.indexOf(step);
@@ -565,13 +627,15 @@ async function askTutor(event) {
   const request = new AbortController();
   activeRequest = request;
   const current = lesson.cursor;
-  const { topic, level, notes, model } = lesson;
+  const { topic, level, notes } = lesson;
+  const model = lesson.model || ui.model.value;
+  if (!model) { activeRequest = null; renderControls(); status(ui['ask-status'], 'Connect a model to ask a follow-up.'); return; }
   const context = followupContext(lesson, current);
   renderControls();
   status(ui['ask-status'], 'Answering on the whiteboard…');
   try {
     const answer = await api('/api/followup', {
-      body: { topic, level, notes, model, question, context }, signal: request.signal
+      body: { topic, level, notes, model, language: lesson.language, mode: lesson.mode, question, context }, signal: request.signal
     });
     if (activeRequest !== request) return;
     lesson.steps.splice(current + 1, 0, { ...answer, question });
@@ -624,6 +688,30 @@ function useMic(button, target, message) {
   });
 }
 
+ui.zoom.addEventListener('change', () => { ui.board.style.zoom = ui.zoom.value; });
+ui['copy-prompt'].addEventListener('click', async () => {
+  const topic = ui.topic.value.trim();
+  if (!topic) { status(ui['import-status'], 'Enter a topic above first.'); ui.topic.focus(); return; }
+  const prompt = [
+    'Prepare a whiteboard lesson that draws itself on a board. Return only JSON in this shape:',
+    '{"title":"Lesson title","steps":[{"heading":"Section","beats":[{"say":"One or two narrated sentences.","draw":[{"kind":"box","id":"a","at":[1,1],"w":4,"h":2,"label":"Cause"},{"kind":"arrow","from":"a","to":[9,2],"label":"leads to"}]}]}]}',
+    'Use 3–5 steps with 2–6 beats each and at most 4 shapes per beat. Each beat draws while its sentences are spoken. The board is 16 units wide and 9 tall; x grows right and y grows down.',
+    'Shape kinds: text (at, text, size title|body|small), equation (at, text), box (at = top-left, w, h, label), circle (at = centre, r, label), arrow and line (from and to: an earlier id or [x,y]), axes (id, at, w, h, xRange, yRange, xLabel, yLabel), plot (axes id, fn written in x such as "x^2"), point (at, optional axes id for data coordinates, label), highlight (target id).',
+    'Use a worked example. Add a check object with question and answer (max 200 and 400 characters) to the final step. Maximum characters: title 100, heading 72, say 300, text and labels 80.',
+    JSON.stringify({ topic, notes: ui.notes.value, level: ui.level.value, language: ui.language.value, mode: document.querySelector('input[name="mode"]:checked').value })
+  ].join('\n');
+  try { await navigator.clipboard.writeText(prompt); status(ui['import-status'], 'Prompt copied. Paste it into Academic AI.'); }
+  catch { ui['lesson-json'].value = prompt; ui['lesson-json'].select(); status(ui['import-status'], 'Copy the selected prompt, then replace it with the JSON answer.'); }
+});
+ui['import-board'].addEventListener('click', async () => {
+  try {
+    const raw = ui['lesson-json'].value.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+    const board = await api('/api/import', { body: JSON.parse(raw) });
+    openLesson({ ...board, id: crypto.randomUUID(), cursor: 0, topic: board.title, notes: ui.notes.value, level: ui.level.value, language: ui.language.value, model: ui.model.value, imported: true });
+    saveLesson();
+    renderHistory();
+  } catch (error) { status(ui['import-status'], error instanceof SyntaxError ? 'Paste the JSON answer from Academic AI.' : error.message, true); }
+});
 ui['topic-form'].addEventListener('submit', createLesson);
 ui['followup-form'].addEventListener('submit', askTutor);
 ui['refresh-models'].addEventListener('click', loadModels);
@@ -633,10 +721,32 @@ ui.cancel.addEventListener('click', () => {
   status(ui.notice, 'Request cancelled.');
   if (lesson && !lesson.sample) status(ui['ask-status']);
 });
+ui['stop-generation'].addEventListener('click', () => {
+  generation?.controller.abort();
+});
+ui['library-tab'].addEventListener('click', () => {
+  openLesson(null);
+  libraryOpen = true;
+  renderLesson();
+});
+ui['import-article'].addEventListener('click', async () => {
+  const button = ui['import-article'];
+  button.disabled = true;
+  try {
+    const source = await api('/api/article', {body: {url: ui.article.value.trim()}});
+    const combined = [ui.notes.value.trim(), source.text].filter(Boolean).join('\n\n');
+    if (combined.length > 12000) throw new Error('Shorten your existing notes before importing this article.');
+    ui.notes.value = combined;
+    if (!ui.topic.value.trim()) ui.topic.value = source.title.slice(0, 500);
+    status(ui.notice, 'Introduction added to your notes. Review it before starting.');
+  } catch (error) { status(ui.notice, error.message, true); }
+  finally { button.disabled = false; }
+});
 ui['new-lesson'].addEventListener('click', () => {
   openLesson(null);
   ui.topic.value = '';
   ui.notes.value = '';
+  ui.article.value = '';
   ui['notes-file'].value = '';
   ui['notes-panel'].open = false;
   ui.topic.focus();

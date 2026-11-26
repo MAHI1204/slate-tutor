@@ -49,7 +49,7 @@ async function fixture(t, chooseAnswer) {
 
 test('serves the web app, static scripts and the installed model list', async (t) => {
   const { base } = await fixture(t, () => sampleOutline);
-  assert.match(await (await fetch(base)).text(), /What do you want/);
+  assert.match(await (await fetch(base)).text(), /What shall we unpack/);
   assert.equal((await fetch(base + '/app.js')).status, 200);
   assert.deepEqual(await (await fetch(base + '/api/models')).json(), {
     online: true, models: [userModel.model]
@@ -70,9 +70,9 @@ test('serves the board modules and the handwriting font', async (t) => {
   assert.equal(new TextDecoder().decode(bytes.slice(0, 4)), 'wOF2');
 });
 
-test('outline request is schema-constrained and passes topic, notes and level', async (t) => {
+test('outline request is schema-constrained and passes topic, notes, level, mode and language', async (t) => {
   const { base, messages } = await fixture(t, () => sampleOutline);
-  const input = { ...userModel, topic: 'How does an RC circuit delay a signal?', notes: 'R = 1 kΩ', level: 'Advanced' };
+  const input = { ...userModel, topic: 'How does an RC circuit delay a signal?', notes: 'R = 1 kΩ', level: 'Advanced', mode: 'Exam', language: 'Telugu' };
   const response = await post(base, '/api/outline', input);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), sampleOutline);
@@ -80,7 +80,10 @@ test('outline request is schema-constrained and passes topic, notes and level', 
   assert.equal(call.model, input.model);
   assert.equal(call.stream, false);
   assert.deepEqual(call.format.required, ['title', 'steps']);
-  assert.deepEqual(JSON.parse(call.messages[1].content), { topic: input.topic, notes: input.notes, level: input.level });
+  const { teachingGoal, language, ...content } = JSON.parse(call.messages[1].content);
+  assert.match(teachingGoal, /exam practice/);
+  assert.equal(language, input.language);
+  assert.deepEqual(content, { topic: input.topic, notes: input.notes, level: input.level });
 });
 
 test('step request carries outline, index and previous lines, and sets Ollama context options', async (t) => {
@@ -180,6 +183,7 @@ test('Gemini serves an outline, a step and a follow-up, keeps the key server-sid
     assert.equal(options.headers['x-goog-api-key'], 'fixture-key');
     const prompt = JSON.parse(body.contents[0].parts[0].text);
     calls.push(prompt);
+    if (prompt.topic === 'unavailable') return new Response(null, { status: 503 });
     if (prompt.topic === 'quota') return new Response(null, { status: 429 });
     const content = body.generationConfig.responseJsonSchema.required[0] === 'title' ? sampleOutline : sampleStep;
     return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify(content) }] } }] });
@@ -192,6 +196,9 @@ test('Gemini serves an outline, a step and a follow-up, keeps the key server-sid
   const followup = await (await post(base, '/api/followup', { model, topic: 'RC delay', context: 'charging', question: 'Why?' })).json();
   assert.equal(followup.beats.length, 2);
   assert.equal(calls[2].context, 'charging');
+  const unavailable = await post(base, '/api/outline', { model, topic: 'unavailable' });
+  assert.equal(unavailable.status, 503);
+  assert.match((await unavailable.json()).error, /temporarily unavailable/);
   assert.equal((await post(base, '/api/outline', { model, topic: 'quota' })).status, 429);
 });
 
@@ -229,4 +236,45 @@ test('reports the reason Gemini gives when it rejects a request', async (t) => {
   const key = await post(base, '/api/outline', { model, topic: 'key' });
   assert.equal(key.status, 502);
   assert.match((await key.json()).error, /Check your Gemini key/);
+});
+
+test('imports the introduction from an English Wikipedia article', async (t) => {
+  const base = await start(createApp({ fetchImpl: async (url) => {
+    assert.equal(url.hostname, 'en.wikipedia.org');
+    assert.equal(url.searchParams.get('titles'), 'Photosynthesis');
+    return Response.json({ query: { pages: [{ title: 'Photosynthesis', extract: 'Leaf biology.' }] } });
+  } }), t);
+  const url = 'https://en.wikipedia.org/wiki/Photosynthesis';
+  assert.match((await (await post(base, '/api/article', { url })).json()).text, /Leaf biology/);
+  assert.equal((await post(base, '/api/article', { url: 'https://example.org' })).status, 400);
+});
+
+test('step request passes mode and language and asks for a check only on the final step', async (t) => {
+  const { base, messages } = await fixture(t, () => sampleStep);
+  const body = { ...userModel, topic: 'RC', outline: sampleOutline, mode: 'Homework', language: 'German' };
+  assert.equal((await post(base, '/api/step', { ...body, index: 1 })).status, 200);
+  assert.equal((await post(base, '/api/step', { ...body, index: 2 })).status, 200);
+  const [middle, last] = messages;
+  const sent = JSON.parse(middle.messages[1].content);
+  assert.match(sent.teachingGoal, /hints/);
+  assert.equal(sent.language, 'German');
+  assert.match(middle.messages[0].content, /Do not add a check object/);
+  assert.match(last.messages[0].content, /final step: add a check object/);
+});
+
+test('imports Academic AI lessons in the old card format or the drawn format, offline', async (t) => {
+  const base = await start(createApp({ fetchImpl: () => assert.fail('Import must work offline') }), t);
+  const card = { heading: 'Read the counter', explanation: 'Each state predicts a direction.',
+    diagram: { type: 'flow', items: [{ label: 'Predict', detail: '01 → not taken' }, { label: 'Train', detail: '01 + 1 → 10' }] } };
+  const table = { heading: 'Trace', explanation: 'Follow the counter.', check: { question: 'Predict from 10?', answer: 'Taken.' },
+    diagram: { type: 'table', items: [{ label: '01', detail: 'miss → 10' }, { label: '10', detail: 'hit → 11' }] } };
+  const result = await post(base, '/api/import', { title: 'Predictor', steps: [card, sampleStep, table] });
+  assert.equal(result.status, 200);
+  const board = await result.json();
+  assert.equal(board.title, 'Predictor');
+  assert.ok(board.steps.every((step) => Array.isArray(step.beats) && !step.diagram));
+  assert.equal(board.steps[1].heading, sampleStep.heading);
+  assert.deepEqual(board.steps[2].check, table.check);
+  assert.equal((await post(base, '/api/import', { steps: [] })).status, 400);
+  assert.equal((await post(base, '/api/import', { title: 'x', steps: [card, card, { heading: 'broken' }] })).status, 400);
 });

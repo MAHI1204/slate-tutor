@@ -178,3 +178,24 @@ test('converting an old lesson keeps its whole explanation', () => {
   assert.equal(step.beats.flatMap((b) => b.draw).filter((s) => s.kind === 'box').length, 3);
   assert.deepEqual(normalizeStep(step), step);
 });
+
+test('keeps a valid knowledge check and drops a broken one', () => {
+  const base = { heading: 'h', beats: [{ say: 's', draw: [raw({ kind: 'text', at: [1, 1], text: 'x' })] }] };
+  const kept = normalizeStep({ ...base, check: { question: ' What next? ', answer: 'Taken.' } });
+  assert.deepEqual(kept.check, { question: 'What next?', answer: 'Taken.' });
+  assert.equal(normalizeStep({ ...base, check: { question: 'Only a question' } }).check, undefined);
+  assert.equal(normalizeStep({ ...base, check: null }).check, undefined);
+  assert.deepEqual(normalizeStep(kept), kept);
+});
+
+test('converts old table cards into drawn rows and keeps the check', () => {
+  const old = { heading: 'States', explanation: 'Each state predicts a direction.', check: { question: 'Predict from 10?', answer: 'Taken.' },
+    diagram: { type: 'table', items: [{ label: '00', detail: 'not taken' }, { label: '01', detail: 'not taken' }, { label: '10', detail: 'taken' }] } };
+  const step = legacyToBeats(old);
+  assert.deepEqual(step.check, old.check);
+  const shapes = step.beats.flatMap((b) => b.draw);
+  const texts = shapes.filter((s) => s.kind === 'text').map((s) => s.text);
+  for (const value of ['00', '01', '10', 'not taken', 'taken']) assert.ok(texts.includes(value), value);
+  assert.ok(shapes.filter((s) => s.kind === 'line').length >= 3);
+  assert.deepEqual(normalizeStep(step), step);
+});

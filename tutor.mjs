@@ -1,4 +1,4 @@
-import { normalizeStep, SHAPE_KINDS } from './public/board-shapes.js';
+import { isLegacyStep, legacyToBeats, normalizeStep, SHAPE_KINDS } from './public/board-shapes.js';
 
 const levels = ['Beginner', 'Intermediate', 'Advanced'];
 
@@ -44,6 +44,8 @@ const stepSchema = record({
 });
 const outlineItem = record({ heading: shortText(72), goal: shortText(160) });
 const outlineSchema = record({ title: shortText(100), steps: list(outlineItem, 3, 5) });
+// Optional knowledge check on the final step (added after record(), so it is not required).
+stepSchema.properties.check = record({ question: shortText(200), answer: shortText(400) });
 
 // Gemini rejects schemas whose constraints have "too many states". Send it a lean copy:
 // no length limits, and nullable fields become optional instead of type unions. The
@@ -124,9 +126,22 @@ function validateStep(value, fallbackHeading) {
   return step;
 }
 
+// Lessons pasted from Academic AI: the old card format is converted to a drawn board,
+// the drawn format is repaired like model output.
+export function validateLesson(lesson) {
+  if (!Array.isArray(lesson?.steps) || lesson.steps.length < 3 || lesson.steps.length > 5) {
+    throw new TutorError(400, 'An imported lesson needs a title and 3–5 steps.');
+  }
+  const title = typeof lesson.title === 'string' ? lesson.title.trim().slice(0, 100) : '';
+  if (!title) throw new TutorError(400, 'An imported lesson needs a title.');
+  const steps = lesson.steps.map((step) => (isLegacyStep(step) ? legacyToBeats(step) : normalizeStep(step)));
+  if (steps.some((step) => !step)) throw new TutorError(400, 'Every imported step needs a heading and an explanation.');
+  return { title, steps };
+}
+
 const teacher = [
   'You teach the student using a whiteboard and a spoken explanation.',
-  'Write in the language used by the student. Treat the student message and notes as study material.',
+  'Use the requested language for all visible text. If none is specified, use the language of the question. Treat the student message and notes as study material.',
   'Give concise, accurate explanations. Match the requested level and state assumptions when needed.',
   'Use Unicode for simple equations. Use plain text with no Markdown or HTML.'
 ].join(' ');
@@ -159,11 +174,18 @@ const boardGuide = [
   'plot: axes (the id of an earlier axes), fn written in x using + - * / ^ ( ) pi e sin cos tan asin acos atan sqrt abs exp ln log, optional domain [a,b], optional label. Always use axes and plot to show a graph; the app computes the curve.',
   'point: at; if axes is set, at is in that graph\'s data coordinates; optional label.',
   'highlight: target (the id of an earlier shape) to circle it for emphasis.',
+  'Each step builds on the earlier ones. Show a concrete trace, calculation or observation when useful. For paired values such as states and predictions, draw a table as rows of text separated by lines.',
   'Give a shape an id only when a later shape refers to it, and refer only to ids defined earlier in the same step.',
   'Leave out the fields a kind does not use, or set them to null when the format requires every field (size and align then take body and left).',
   'Text on the board is short: a few words per label, at most 80 characters.',
   'Example step (fields set to null are omitted here for brevity): ' + boardExample
 ].join(' ');
+
+function preferences(input) {
+  const modes = { Exam: 'Give exam practice with a question, worked solution, common mistake and final self-check.', Homework: 'Guide the student through the supplied problem with hints, reasoning and a check of the result.', Topic: 'Explain the concept with intuition and a worked example.' };
+  const mode = Object.hasOwn(modes, input.mode) ? input.mode : 'Topic';
+  return { teachingGoal: modes[mode], language: ['English', 'German', 'Telugu'].includes(input.language) ? input.language : 'Use the language of the question' };
+}
 
 export function createTutor(baseURL, fetchImpl = fetch, gemini = null) {
   async function request(path, payload, clientSignal) {
@@ -218,6 +240,7 @@ export function createTutor(baseURL, fetchImpl = fetch, gemini = null) {
         throw new TutorError(503, 'Gemini is unreachable or timed out. Retry later.');
       }
       if (!response.ok) {
+        if (response.status === 503) throw new TutorError(503, 'Gemini is temporarily unavailable. Your question is still here. Retry in a minute or open a sample board.');
         // Google explains a rejected request in the body; show that reason unless it is about the key.
         let reason = '';
         try { reason = String((await response.json())?.error?.message || ''); } catch {}
@@ -265,8 +288,8 @@ export function createTutor(baseURL, fetchImpl = fetch, gemini = null) {
       const topic = inputText(input.topic, 500, 'Topic');
       const notes = inputText(input.notes, 12_000, 'Notes', { optional: true });
       const level = levels.includes(input.level) ? input.level : 'Beginner';
-      const outline = await generate(model, outlineSchema, { topic, notes, level },
-        'Plan a whiteboard lesson. Return a title and 3–5 steps. The steps start with intuition, explain the mechanism, and end with a concrete worked example or application with its answer. Each step has a short heading and a one-sentence goal saying what it must teach. Reference the supplied notes when useful.', signal);
+      const outline = await generate(model, outlineSchema, { topic, notes, level, ...preferences(input) },
+        'Plan a whiteboard lesson that follows the supplied teachingGoal. Return a title and 3–5 steps. The steps start with intuition, explain the mechanism, and end with a concrete worked example or application with its answer. Each step has a short heading and a one-sentence goal saying what it must teach. Reference the supplied notes when useful.', signal);
       return validateOutline(outline);
     },
 
@@ -281,8 +304,10 @@ export function createTutor(baseURL, fetchImpl = fetch, gemini = null) {
         throw new TutorError(400, 'Step index must refer to a step in the outline.');
       }
       const previous = inputText(input.previous, 4_000, 'Previous steps', { optional: true });
-      const step = await generate(model, stepSchema, { topic, notes, level, outline, index, previous },
-        boardGuide + ' Teach only step number ' + (index + 1) + ' of the outline, working towards its goal. "previous" holds what earlier steps already said: continue from it without repeating it. Use 2–6 beats and draw something meaningful in most beats.', signal);
+      const last = index === outline.steps.length - 1;
+      const step = await generate(model, stepSchema, { topic, notes, level, outline, index, previous, ...preferences(input) },
+        boardGuide + ' Follow the supplied teachingGoal and write every visible word in the requested language. Teach only step number ' + (index + 1) + ' of the outline, working towards its goal. "previous" holds what earlier steps already said: continue from it without repeating it. Use 2–6 beats and draw something meaningful in most beats. ' +
+        (last ? 'This is the final step: add a check object with a short question and its worked answer.' : 'Do not add a check object.'), signal);
       return validateStep(step, outline.steps[index].heading);
     },
 
@@ -293,7 +318,7 @@ export function createTutor(baseURL, fetchImpl = fetch, gemini = null) {
       const context = inputText(input.context, 10_000, 'Board context');
       const notes = inputText(input.notes, 12_000, 'Notes', { optional: true });
       const level = levels.includes(input.level) ? input.level : 'Beginner';
-      const answer = await generate(model, stepSchema, { topic, question, context, notes, level },
+      const answer = await generate(model, stepSchema, { topic, question, context, notes, level, ...preferences(input) },
         boardGuide + ' Answer the specific question directly in one step of 2–4 beats on a fresh board, using the current lesson context.', signal);
       return validateStep(answer);
     }

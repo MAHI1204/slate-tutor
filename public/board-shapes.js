@@ -221,6 +221,9 @@ export function normalizeStep(raw, { fallbackHeading } = {}) {
   if (total === 0) fallbackBoard(heading, beats);
   const step = { heading, explanation: beats.map((beat) => beat.say).join(' '), beats };
   optional(step, 'question', truncate(raw.question, 500));
+  const question = truncate(raw.check?.question, 200);
+  const answer = truncate(raw.check?.answer, 400);
+  if (question && answer) step.check = { question, answer };
   optional(step, 'goal', truncate(raw.goal, 160));
   return step;
 }
@@ -234,6 +237,14 @@ function legacyShapes(type, items) {
   const n = items.length;
   const margin = 0.6;
   return items.map(({ label, detail }, i) => {
+    if (type === 'table') {
+      const y = round(1.2 + i * 1.5);
+      return [
+        { kind: 'text', at: [1, y], text: label, size: 'body', align: 'left' },
+        { kind: 'text', at: [7, y], text: detail, size: 'body', align: 'left' },
+        { kind: 'line', from: [0.8, round(y + 1)], to: [15.2, round(y + 1)] }
+      ];
+    }
     if (type === 'steps') {
       return [{ kind: 'text', at: [0.8, round(1.2 + i * 1.6)], text: (i + 1) + '. ' + label + ': ' + detail, size: 'body', align: 'left' }];
     }
@@ -279,7 +290,7 @@ function chunkText(text) {
 export function legacyToBeats(step) {
   const items = (Array.isArray(step?.diagram?.items) ? step.diagram.items : [])
     .map((item) => ({ label: String(item?.label ?? ''), detail: String(item?.detail ?? '') }));
-  const type = ['flow', 'compare', 'steps'].includes(step?.diagram?.type) ? step.diagram.type : 'steps';
+  const type = ['flow', 'compare', 'steps', 'table'].includes(step?.diagram?.type) ? step.diagram.type : 'steps';
   const shapes = legacyShapes(type, items);
   const chunks = chunkText(step?.explanation || step?.heading);
   const beats = chunks.map((say, i) => ({ say, draw: i === 0 ? shapes[0] ?? [] : [] }));
@@ -288,5 +299,5 @@ export function legacyToBeats(step) {
   beats.push(...itemBeats.slice(0, room));
   // In the rare case that there is no room left, the remaining items' shapes join the last beat.
   for (const extra of itemBeats.slice(room)) beats[beats.length - 1].draw.push(...extra.draw);
-  return normalizeStep({ heading: step?.heading, question: step?.question, beats });
+  return normalizeStep({ heading: step?.heading, question: step?.question, check: step?.check, beats });
 }

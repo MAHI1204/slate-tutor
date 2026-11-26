@@ -41,3 +41,11 @@ test('no sample step needs nudging or scaling with estimated text widths', () =>
     });
   }
 });
+
+test('the studio samples are drawn boards and the predictor ends with a knowledge check', () => {
+  assert.equal(samples.predictor.title, 'Trace a two-bit branch predictor');
+  assert.equal(samples.plant.title, 'How photosynthesis works');
+  const last = samples.predictor.steps.at(-1);
+  assert.match(last.check.question, /prediction/);
+  assert.ok(samples.plant.steps.every((step) => step.beats.length >= 2));
+});

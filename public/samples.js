@@ -17,6 +17,78 @@ const point = (axesId, at, label) => clean({ kind: 'point', at, axes: axesId, la
 const highlight = (target) => ({ kind: 'highlight', target });
 
 export const samples = {
+  predictor: {
+    title: 'Trace a two-bit branch predictor',
+    steps: [
+      step('Read the direction counter',
+        beat('Consider one conditional branch with its own two-bit counter. There is no aliasing, and every update finishes before the next prediction.',
+          box([1, 1], 3.6, 1.4, 'counter'), text([5.2, 1.4], 'two bits per branch')),
+        beat('The counter has four states, and the upper bit gives the prediction. States 00 and 01 predict not taken.',
+          text([1, 3.2], '00 · strongly not taken'), text([9.5, 3.2], 'predict not taken'),
+          text([1, 4.3], '01 · weakly not taken'), text([9.5, 4.3], 'predict not taken')),
+        beat('States 10 and 11 predict taken.',
+          text([1, 5.4], '10 · weakly taken'), text([9.5, 5.4], 'predict taken'),
+          text([1, 6.5], '11 · strongly taken'), text([9.5, 6.5], 'predict taken'))),
+      step('Follow a taken outcome',
+        beat('Start in state 01. Read the upper bit before updating: it is zero, so predict not taken.',
+          circle([2.5, 3.5], 1, '01', 's01'), text([2.5, 5], 'predict not taken', { size: 'small', align: 'center' })),
+        beat('The branch resolves taken, so this prediction is a miss.',
+          box([6, 2.8], 3.4, 1.4, 'actual: taken', 'out'), arrow('s01', 'out'), text([7.7, 4.6], 'miss', { size: 'small', align: 'center' })),
+        beat('Training adds one to the counter, so it moves from 01 to 10.',
+          circle([13, 3.5], 1, '10', 's10'), arrow('out', 's10', '+1'), highlight('s10'))),
+      step('Trace three predictions',
+        beat('Start in 01 again and apply the outcomes taken, taken, not taken. Each row starts from the state the previous row left.',
+          text([1, 1], 'state', { size: 'small' }), text([4.5, 1], 'prediction', { size: 'small' }),
+          text([8.5, 1], 'actual', { size: 'small' }), text([11.5, 1], 'result', { size: 'small' })),
+        beat('From 01 we predict not taken, but the branch is taken: a miss, and the counter moves to 10.',
+          text([1, 2], '01'), text([4.5, 2], 'not taken'), text([8.5, 2], 'taken'), text([11.5, 2], 'miss → 10')),
+        beat('From 10 we predict taken and it is taken: a hit, moving to 11.',
+          text([1, 3.1], '10'), text([4.5, 3.1], 'taken'), text([8.5, 3.1], 'taken'), text([11.5, 3.1], 'hit → 11')),
+        beat('From 11 we predict taken, but the branch is not taken: another miss, back to 10. Two of the three predictions miss.',
+          text([1, 4.2], '11'), text([4.5, 4.2], 'taken'), text([8.5, 4.2], 'not taken'), text([11.5, 4.2], 'miss → 10'))),
+      {
+        ...step('Check your prediction',
+          beat('Continue from state 10. The next outcome is not taken.',
+            circle([3, 4], 1.1, '10'), text([3, 5.5], 'weakly taken', { size: 'small', align: 'center' }), box([7, 3.3], 4, 1.4, 'next: not taken')),
+          beat('Make your prediction, then reveal the answer below the board.',
+            text([7, 6], 'Predict, then check ↓'))),
+        check: { question: 'What is the prediction and the state after training?', answer: 'Predict taken, record a miss, and decrement from 10 to 01.' }
+      }
+    ]
+  },
+  plant: {
+    title: 'How photosynthesis works',
+    steps: [
+      step('Follow the energy and the matter',
+        beat('A leaf uses light energy to build sugars from carbon dioxide and water.',
+          circle([2, 2], 1, 'Sun', 'sun'), box([6, 3], 4, 2, 'leaf', 'leaf'), arrow('sun', 'leaf', 'light')),
+        beat('Follow the carbon and the energy separately.',
+          text([11.5, 2], 'energy: light'), text([11.5, 3], 'carbon: CO₂')),
+        beat('Carbon dioxide enters through tiny pores in the leaf.',
+          arrow([8, 8.3], 'leaf', 'CO₂ in'))),
+      step('Capture light',
+        beat('Inside chloroplasts, pigments absorb light.',
+          box([5, 2], 5, 2.2, 'chloroplast', 'chl'), arrow([1, 1], 'chl', 'light')),
+        beat('The light reactions split water and release oxygen.',
+          text([1, 5], 'H₂O'), arrow([2.2, 5.3], 'chl'), arrow('chl', [13, 5.3]), text([13.2, 5], 'O₂')),
+        beat('They also make ATP and NADPH, the energy carriers for the next stage.',
+          equation([10.8, 2.6], 'ATP + NADPH'))),
+      step('Build sugar',
+        beat('The Calvin cycle uses ATP and NADPH to fix carbon from carbon dioxide.',
+          circle([6, 4], 1.8, 'Calvin cycle', 'cyc'), text([0.8, 1.2], 'CO₂'), arrow([1.6, 1.6], 'cyc')),
+        beat('Energy from the light reactions turns that carbon into small sugar molecules.',
+          text([10, 1.2], 'ATP, NADPH'), arrow([11, 1.9], 'cyc')),
+        beat('The plant uses these to make sucrose or starch.',
+          arrow('cyc', [12.5, 6], 'sugar'), box([12.6, 5.4], 2.8, 1.2, 'starch'))),
+      step('Check the oxygen',
+        beat('Where does the oxygen a leaf releases come from?',
+          text([1, 1.2], 'Where does O₂ come from?', { size: 'title' })),
+        beat('It comes from water split during the light reactions.',
+          box([1, 3], 5, 1.4, 'water → O₂')),
+        beat('The carbon in sugar comes from carbon dioxide.',
+          box([8, 3], 6, 1.4, 'CO₂ → sugar')))
+    ]
+  },
   moon: {
     title: 'Why the Moon changes shape',
     steps: [
