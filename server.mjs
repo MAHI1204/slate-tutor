@@ -9,6 +9,7 @@ const files = new Map([
   ['/app.js', ['app.js', 'text/javascript']],
   ['/samples.js', ['samples.js', 'text/javascript']],
   ['/board-math.js', ['board-math.js', 'text/javascript']],
+  ['/board-shapes.js', ['board-shapes.js', 'text/javascript']],
   ['/styles.css', ['styles.css', 'text/css']]
 ]);
 
