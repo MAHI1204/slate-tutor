@@ -45,6 +45,28 @@ const stepSchema = record({
 const outlineItem = record({ heading: shortText(72), goal: shortText(160) });
 const outlineSchema = record({ title: shortText(100), steps: list(outlineItem, 3, 5) });
 
+// Gemini rejects schemas whose constraints have "too many states". Send it a lean copy:
+// no length limits, and nullable fields become optional instead of type unions. The
+// server validates and repairs everything the model returns, so nothing is lost.
+export function geminiSchema(schema) {
+  if (Array.isArray(schema)) return schema.map(geminiSchema);
+  if (!schema || typeof schema !== 'object') return schema;
+  const lean = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (['minItems', 'maxItems', 'minLength', 'maxLength'].includes(key)) continue;
+    lean[key] = geminiSchema(value);
+  }
+  if (Array.isArray(lean.type)) lean.type = lean.type.find((type) => type !== 'null');
+  if (Array.isArray(lean.enum)) lean.enum = lean.enum.filter((value) => value !== null);
+  if (lean.properties && Array.isArray(schema.required)) {
+    lean.required = schema.required.filter((name) => {
+      const type = schema.properties[name]?.type;
+      return !(Array.isArray(type) && type.includes('null')) && !['size', 'align'].includes(name) || name === 'kind';
+    });
+  }
+  return lean;
+}
+
 export class TutorError extends Error {
   constructor(status, message) {
     super(message);
@@ -138,7 +160,7 @@ const boardGuide = [
   'point: at; if axes is set, at is in that graph\'s data coordinates; optional label.',
   'highlight: target (the id of an earlier shape) to circle it for emphasis.',
   'Give a shape an id only when a later shape refers to it, and refer only to ids defined earlier in the same step.',
-  'Every shape object must include every field; set the fields a kind does not use to null, except size and align, which always need a value (use body and left when the kind does not use them).',
+  'Leave out the fields a kind does not use, or set them to null when the format requires every field (size and align then take body and left).',
   'Text on the board is short: a few words per label, at most 80 characters.',
   'Example step (fields set to null are omitted here for brevity): ' + boardExample
 ].join(' ');
@@ -188,7 +210,7 @@ export function createTutor(baseURL, fetchImpl = fetch, gemini = null) {
           body: JSON.stringify({
             systemInstruction: { parts: [{ text: teacher + ' ' + instruction }] },
             contents: [{ role: 'user', parts: [{ text: JSON.stringify(userMessage) }] }],
-            generationConfig: { responseMimeType: 'application/json', responseJsonSchema: schema }
+            generationConfig: { responseMimeType: 'application/json', responseJsonSchema: geminiSchema(schema) }
           })
         });
       } catch (error) {
@@ -196,6 +218,13 @@ export function createTutor(baseURL, fetchImpl = fetch, gemini = null) {
         throw new TutorError(503, 'Gemini is unreachable or timed out. Retry later.');
       }
       if (!response.ok) {
+        // Google explains a rejected request in the body; show that reason unless it is about the key.
+        let reason = '';
+        try { reason = String((await response.json())?.error?.message || ''); } catch {}
+        if (response.status === 400 && reason && !/api key/i.test(reason)) {
+          console.error('Gemini rejected the request:', reason);
+          throw new TutorError(502, 'Gemini rejected the request: ' + reason.slice(0, 300));
+        }
         const messages = { 400: 'Check your Gemini key and model configuration.',
           403: 'Gemini denied access. Check key permissions.', 404: 'Gemini model unavailable.',
           429: 'Gemini quota reached. Check your project limits or retry later.' };

@@ -194,3 +194,39 @@ test('Gemini serves an outline, a step and a follow-up, keeps the key server-sid
   assert.equal(calls[2].context, 'charging');
   assert.equal((await post(base, '/api/outline', { model, topic: 'quota' })).status, 429);
 });
+
+test('sends Gemini a lean schema without length limits or nullable unions', async (t) => {
+  const schemas = [];
+  const model = 'gemini-3.1-flash-lite';
+  const fetchImpl = async (url, options) => {
+    const schema = JSON.parse(options.body).generationConfig.responseJsonSchema;
+    schemas.push(schema);
+    const content = schema.required[0] === 'title' ? sampleOutline : sampleStep;
+    return Response.json({ candidates: [{ content: { parts: [{ text: JSON.stringify(content) }] } }] });
+  };
+  const base = await start(createApp({ gemini: { key: 'fixture-key', model }, fetchImpl }), t);
+  assert.equal((await post(base, '/api/outline', { model, topic: 'RC' })).status, 200);
+  assert.equal((await post(base, '/api/step', { model, topic: 'RC', outline: sampleOutline, index: 0 })).status, 200);
+  const text = JSON.stringify(schemas);
+  for (const limit of ['minItems', 'maxItems', 'minLength', 'maxLength']) assert.ok(!text.includes(limit), limit);
+  assert.ok(!text.includes('"null"'), 'no nullable unions');
+  const shape = schemas[1].properties.beats.items.properties.draw.items;
+  assert.deepEqual(shape.required, ['kind']);
+  assert.equal(shape.properties.at.type, 'array');
+});
+
+test('reports the reason Gemini gives when it rejects a request', async (t) => {
+  const model = 'gemini-3.1-flash-lite';
+  const fetchImpl = async (url, options) => {
+    const topic = JSON.parse(JSON.parse(options.body).contents[0].parts[0].text).topic;
+    const message = topic === 'key' ? 'API key not valid. Please pass a valid API key.' : 'The specified schema produces a constraint that has too many states for serving.';
+    return Response.json({ error: { code: 400, message, status: 'INVALID_ARGUMENT' } }, { status: 400 });
+  };
+  const base = await start(createApp({ gemini: { key: 'fixture-key', model }, fetchImpl }), t);
+  const schema = await post(base, '/api/outline', { model, topic: 'schema' });
+  assert.equal(schema.status, 502);
+  assert.match((await schema.json()).error, /Gemini rejected the request: The specified schema produces a constraint/);
+  const key = await post(base, '/api/outline', { model, topic: 'key' });
+  assert.equal(key.status, 502);
+  assert.match((await key.json()).error, /Check your Gemini key/);
+});
