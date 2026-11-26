@@ -139,3 +139,14 @@ test('imports the introduction from an English Wikipedia article', async (t) => 
   assert.match((await (await post(base, '/api/article', { url })).json()).text, /Leaf biology/);
   assert.equal((await post(base, '/api/article', { url: 'https://example.org' })).status, 400);
 });
+
+test('opens a table and revealable check from Academic AI without contacting a model', async (t) => {
+  const base = await start(createApp({ fetchImpl: () => assert.fail('Import must work offline') }), t);
+  const step = { ...sampleStep, diagram: { ...sampleStep.diagram, type: 'table' },
+    check: { question: 'Predict from 10?', answer: 'Taken.' } };
+  const board = { title: 'Predictor', steps: [sampleStep, sampleStep, step] };
+  const result = await post(base, '/api/import', board);
+  assert.equal(result.status, 200);
+  assert.deepEqual(await result.json(), board);
+  assert.equal((await post(base, '/api/import', { steps: [] })).status, 400);
+});

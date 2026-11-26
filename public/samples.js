@@ -3,6 +3,20 @@ const scene = (heading, explanation, type, ...items) =>
   ({ heading, explanation, diagram: { type, items } });
 
 export const samples = {
+  predictor: {
+    title: 'Trace a two-bit branch predictor',
+    steps: [
+      scene('Read the direction counter', 'Consider one conditional branch with a dedicated two-bit counter. For this example there is no aliasing and every update finishes before the next prediction.', 'table',
+        item('00 · strongly not taken', 'Predict not taken'), item('01 · weakly not taken', 'Predict not taken'), item('10 · weakly taken', 'Predict taken'), item('11 · strongly taken', 'Predict taken')),
+      scene('Follow a taken outcome', 'Start in 01. Read the upper bit before updating: it is zero, so predict not taken. The branch resolves taken. Count one miss and increment the counter to 10.', 'flow',
+        item('Predict', '01 → not taken'), item('Resolve', 'Observed outcome: taken'), item('Train', '01 + 1 → 10')),
+      scene('Trace three predictions', 'Starting in 01, apply the outcomes taken, taken, not taken. Each row starts from the state left by the previous row. Two of the three predictions miss.', 'table',
+        item('01 · predict NT', 'Actual T → miss → 10'), item('10 · predict T', 'Actual T → hit → 11'), item('11 · predict T', 'Actual NT → miss → 10')),
+      { ...scene('Check your prediction', 'Continue from state 10. Make your prediction before revealing the answer.', 'compare',
+        item('Current counter', '10 · weakly taken'), item('Next actual outcome', 'Not taken')),
+        check: { question: 'What is the prediction and the state after training?', answer: 'Predict taken, record a miss, and decrement from 10 to 01.' } }
+    ]
+  },
   plant: {
     title: 'How photosynthesis works',
     steps: [

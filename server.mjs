@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
-import { createTutor, TutorError } from './tutor.mjs';
+import { createTutor, TutorError, validateLesson } from './tutor.mjs';
 
 const files = new Map([
   ['/', ['index.html', 'text/html']],
@@ -60,6 +60,11 @@ export function createApp({ ollama = 'http://127.0.0.1:11434', gemini = null, fe
       }
       if (request.method === 'POST' && path === '/api/followup') {
         return json(response, 200, await tutor.followup(await input(request), client.signal));
+      }
+      if (request.method === 'POST' && path === '/api/import') {
+        const board = await input(request);
+        try { return json(response, 200, validateLesson(board)); }
+        catch (error) { throw new TutorError(400, error.message); }
       }
       if (request.method === 'POST' && path === '/api/article') {
         const { url } = await input(request);
