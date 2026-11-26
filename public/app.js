@@ -10,6 +10,9 @@ const board = createBoard(ui['board-svg'], { reducedMotion: window.matchMedia('(
 let saved = readSaved();
 let lesson = saved[0] || makeSample('moon');
 let activeRequest = null;
+let generation = null;
+let unloading = false;
+const waiters = new Map();
 let models = [];
 let modelCheck = 0;
 let playback = null;
@@ -23,22 +26,30 @@ function makeSample(key) {
   return { ...sample, sample: true, topic: sample.title, cursor: 0, level: 'Beginner' };
 }
 
+// Old-format steps are converted; steps that were still being generated when the page
+// closed come back as failed so their outline row offers Retry.
+function loadStep(step) {
+  if (isLegacyStep(step)) return legacyToBeats(step);
+  if (step?.pending) return { ...step, failed: true, error: step.error || 'the page was closed before it was ready.' };
+  return step;
+}
+
 function readSaved() {
   try {
     const data = JSON.parse(localStorage.getItem(historyKey) || '[]');
     if (!Array.isArray(data)) return [];
     return data
       .filter((value) => value?.id && Array.isArray(value.steps))
-      .map((value) => ({ ...value, steps: value.steps.map((step) => (isLegacyStep(step) ? legacyToBeats(step) : step)).filter(Boolean) }))
+      .map((value) => ({ ...value, steps: value.steps.map(loadStep).filter(Boolean) }))
       .filter((value) => value.steps.length > 0);
   } catch {
     return [];
   }
 }
 
-function saveLesson() {
-  if (!lesson || lesson.sample) return;
-  saved = [lesson, ...saved.filter((item) => item.id !== lesson.id)].slice(0, 15);
+function saveLesson(target = lesson) {
+  if (!target || target.sample) return;
+  saved = [target, ...saved.filter((item) => item.id !== target.id)].slice(0, 15);
   try {
     localStorage.setItem(historyKey, JSON.stringify(saved));
   } catch {
@@ -107,6 +118,21 @@ function activeStep() {
   return lesson?.steps[lesson.cursor];
 }
 
+const isReady = (step) => Boolean(step && !step.pending && Array.isArray(step.beats));
+
+function stepReady(step) {
+  if (isReady(step)) return Promise.resolve('ready');
+  if (step.failed) return Promise.resolve('failed');
+  return new Promise((resolve) => {
+    waiters.set(step, [...(waiters.get(step) || []), resolve]);
+  });
+}
+
+function settle(step, result) {
+  for (const resolve of waiters.get(step) || []) resolve(result);
+  waiters.delete(step);
+}
+
 function stopVoice() {
   stopTalking?.();
   if (speech) speech.cancel();
@@ -118,8 +144,10 @@ function stopPlayback() {
   const current = playback;
   playback = null;
   current?.drawing?.finish();
+  current?.release();
   stopVoice();
-  if (current) resumePoint = { lesson, stepIndex: current.stepIndex, beat: current.beat };
+  if (current && current.beat < 0) status(ui['speech-status']);
+  if (current && current.beat >= 0) resumePoint = { lesson, stepIndex: current.stepIndex, beat: current.beat };
   renderControls();
 }
 
@@ -137,13 +165,14 @@ function highlightBeat(index) {
 
 function renderControls() {
   const busy = Boolean(activeRequest);
-  ui.generate.disabled = busy;
-  ui.cancel.hidden = !busy;
-  ui.ask.disabled = busy || Boolean(lesson?.sample);
+  const generating = Boolean(generation);
+  ui.generate.disabled = busy || generating;
+  ui.cancel.hidden = !busy && !generating;
+  ui.ask.disabled = busy || generating || Boolean(lesson?.sample) || !isReady(activeStep());
   ui.back.disabled = busy || !lesson || lesson.cursor === 0;
   ui.next.disabled = busy || !lesson || lesson.cursor === lesson.steps.length - 1;
   ui.play.disabled = busy || !lesson;
-  ui.replay.disabled = busy || !lesson;
+  ui.replay.disabled = busy || !isReady(activeStep());
   ui.play.textContent = playback ? 'Pause lesson' : 'Play lesson';
 }
 
@@ -153,6 +182,12 @@ function renderBoard(step) {
 }
 
 function renderTranscript(step) {
+  if (!isReady(step)) {
+    ui.explanation.textContent = step.failed
+      ? 'This step could not be drawn: ' + step.error + ' Use Retry in the outline.'
+      : 'Preparing this step…';
+    return;
+  }
   const spans = step.beats.map((beat, index) => {
     const span = element('span', beat.say);
     span.dataset.beat = String(index);
@@ -175,25 +210,48 @@ function renderLesson(boardMode = 'full') {
   renderTranscript(step);
   if (lesson.sample) {
     status(ui['ask-status'], 'Create a custom lesson to ask your own follow-up questions.');
+  } else if (generation?.lesson === lesson) {
+    status(ui['ask-status'], 'Follow-ups open once every step is drawn.');
   } else if (!activeRequest) {
     status(ui['ask-status']);
   }
   ui.followup.disabled = Boolean(lesson.sample);
   ui['ask-mic'].disabled = Boolean(lesson.sample);
-  if (boardMode === 'full') renderBoard(step);
-  const steps = lesson.steps.map(({ heading, question }, index) => {
+  if (boardMode === 'full') {
+    if (isReady(step)) renderBoard(step);
+    else {
+      board.clear();
+      ui['board-svg'].setAttribute('aria-label', step.failed ? 'This step could not be drawn.' : 'Preparing this step.');
+    }
+  }
+  renderOutline();
+}
+
+function renderOutline() {
+  if (!lesson) return;
+  const rows = lesson.steps.map((step, index) => {
     const row = element('li');
     const button = element('button');
     button.type = 'button';
     if (index === lesson.cursor) button.setAttribute('aria-current', 'step');
-    button.append(element('span', String(index + 1)), element('span', question ? 'Follow-up: ' + heading : heading));
+    const label = element('span', step.question ? 'Follow-up: ' + step.heading : step.heading);
+    if (step.pending && !step.failed) label.append(element('span', 'preparing…', 'step-state'));
+    if (step.failed) label.append(element('span', 'not drawn', 'step-state'));
+    button.append(element('span', String(index + 1)), label);
     button.addEventListener('click', () => {
       if (!activeRequest) moveTo(index);
     });
     row.append(button);
+    if (step.failed) {
+      const retry = element('button', 'Retry', 'retry');
+      retry.type = 'button';
+      retry.setAttribute('aria-label', 'Retry step ' + (index + 1));
+      retry.addEventListener('click', () => retryStep(step));
+      row.append(retry);
+    }
     return row;
   });
-  ui.outline.replaceChildren(...steps);
+  ui.outline.replaceChildren(...rows);
 }
 
 function cancelRequest() {
@@ -214,6 +272,7 @@ function openLesson(value) {
 
 function moveTo(index) {
   haltPlayback();
+  status(ui['speech-status']);
   lesson.cursor = index;
   saveLesson();
   renderLesson();
@@ -271,15 +330,37 @@ function beatDuration(say, shapes) {
 // earlier beats of this step (resuming after a pause).
 async function playFrom(stepIndex, beat, { untilEndOfStep = false, continuing = false } = {}) {
   const run = Symbol('playback');
-  const current = { run, stepIndex, beat, drawing: null };
+  let release;
+  const released = new Promise((resolve) => { release = resolve; });
+  const current = { run, stepIndex, beat: -1, drawing: null, release: () => release('stopped') };
+  const playing = lesson;
   playback = current;
   resumePoint = null;
   status(ui['speech-status']);
   renderControls();
   let redraw = !continuing;
   while (playback === current) {
+    if (lesson !== playing) {
+      haltPlayback();
+      return;
+    }
     lesson.cursor = stepIndex;
-    const step = lesson.steps[stepIndex];
+    let step = lesson.steps[stepIndex];
+    if (!isReady(step)) {
+      renderLesson();
+      status(ui['speech-status'], 'Drawing the next step…');
+      const result = await Promise.race([stepReady(step), released]);
+      if (playback !== current) return;
+      status(ui['speech-status']);
+      if (result !== 'ready') {
+        playback = null;
+        renderLesson();
+        status(ui['speech-status'], 'This step could not be drawn. Use Retry in the outline.', true);
+        return;
+      }
+      step = lesson.steps[stepIndex];
+      redraw = true;
+    }
     if (redraw) {
       renderLesson('none');
       await board.show(step, beat - 1);
@@ -312,6 +393,7 @@ async function playFrom(stepIndex, beat, { untilEndOfStep = false, continuing = 
 function play() {
   const step = activeStep();
   if (!step) return;
+  if (!isReady(step)) return playFrom(lesson.cursor, 0);
   const point = resumePoint;
   resumePoint = null;
   if (point && point.lesson === lesson && point.stepIndex === lesson.cursor) {
@@ -339,11 +421,17 @@ async function createLesson(event) {
   const level = ui.level.value;
   const notes = ui.notes.value.trim();
   renderControls();
-  status(ui.notice, 'Preparing your whiteboard lesson…');
+  status(ui.notice, 'Planning your lesson…');
+  let created = null;
   try {
-    const response = await api('/api/lesson', { body: { topic, notes, level, model }, signal: request.signal });
+    const outline = await api('/api/outline', { body: { topic, notes, level, model }, signal: request.signal });
     if (activeRequest !== request) return;
-    lesson = { ...response, id: crypto.randomUUID(), topic, level, model, notes, cursor: 0 };
+    haltPlayback();
+    lesson = {
+      id: crypto.randomUUID(), title: outline.title, topic, level, model, notes, cursor: 0,
+      steps: outline.steps.map(({ heading, goal }) => ({ heading, goal, pending: true }))
+    };
+    created = lesson;
     ui.followup.value = '';
     status(ui.notice);
     status(ui['speech-status']);
@@ -354,14 +442,118 @@ async function createLesson(event) {
     if (activeRequest === request) {
       activeRequest = null;
       renderLesson();
+      if (created) runQueue(created);
     }
   }
+}
+
+function outlineFor(target) {
+  const steps = target.steps.filter((step) => !step.question);
+  return { steps, outline: { title: target.title, steps: steps.map((step) => ({ heading: step.heading, goal: step.goal || step.heading })) } };
+}
+
+function previousLines(target, step) {
+  const before = target.steps.slice(0, target.steps.indexOf(step)).filter((item) => isReady(item) && !item.question);
+  return before.map((item) => item.heading + ': ' + item.beats.map((beat) => beat.say).join(' ')).join('\n').slice(-4_000);
+}
+
+function afterStepChange(target, index) {
+  if (target !== lesson) return;
+  if (index === lesson.cursor && !playback && !resumePoint) renderLesson();
+  else {
+    renderControls();
+    renderOutline();
+  }
+}
+
+// Generates the lesson's pending steps one at a time, in order. Steps stay addressable by
+// object, so switching lessons mid-way never writes into the wrong lesson.
+async function runQueue(target) {
+  if (generation) return;
+  const controller = new AbortController();
+  generation = { lesson: target, controller };
+  if (target === lesson) renderLesson(playback || resumePoint ? 'none' : 'full');
+  const { topic, notes, level, model } = target;
+  try {
+    for (let step = target.steps.find((item) => item.pending && !item.failed); step;
+      step = target.steps.find((item) => item.pending && !item.failed)) {
+      const { steps, outline } = outlineFor(target);
+      try {
+        const result = await api('/api/step', {
+          body: { topic, notes, level, model, outline, index: steps.indexOf(step), previous: previousLines(target, step) },
+          signal: controller.signal
+        });
+        const index = target.steps.indexOf(step);
+        if (index === -1) continue;
+        target.steps[index] = { ...result, goal: step.goal };
+        saveLesson(target);
+        settle(step, 'ready');
+        afterStepChange(target, index);
+      } catch (error) {
+        if (controller.signal.aborted || unloading) break;
+        step.failed = true;
+        step.error = error.message;
+        saveLesson(target);
+        settle(step, 'failed');
+        afterStepChange(target, target.steps.indexOf(step));
+      }
+    }
+  } finally {
+    if (controller.signal.aborted && !unloading) {
+      for (const step of target.steps.filter((item) => item.pending && !item.failed)) {
+        step.failed = true;
+        step.error = cancelledMessage;
+        settle(step, 'cancelled');
+      }
+      saveLesson(target);
+    }
+    generation = null;
+    if (target === lesson) renderLesson(playback || resumePoint ? 'none' : 'full');
+    else renderControls();
+  }
+}
+
+const cancelledMessage = 'Generation was cancelled.';
+
+function retryStep(step) {
+  if (generation && generation.lesson !== lesson) {
+    status(ui['ask-status'], 'Another lesson is still being drawn. Retry once it finishes.');
+    return;
+  }
+  // Retrying a cancelled step resumes every step the cancel stopped.
+  const cancelled = step.error === cancelledMessage;
+  for (const item of lesson.steps) {
+    if (item === step || (cancelled && item.failed && item.error === cancelledMessage)) {
+      item.failed = false;
+      delete item.error;
+    }
+  }
+  saveLesson();
+  status(ui['speech-status']);
+  if (generation) renderOutline();
+  else runQueue(lesson);
+}
+
+function followupContext(target, current) {
+  let items = target.steps.slice(Math.max(0, current - 4), current + 1).filter(isReady).map((step) => ({
+    current: step === target.steps[current],
+    heading: step.heading,
+    say: step.beats.map((beat) => beat.say),
+    shapes: step.beats.flatMap((beat) => beat.draw.flatMap((shape) => [shape.text, shape.label].filter(Boolean))),
+    question: step.question
+  }));
+  let text = JSON.stringify(items);
+  while (text.length > 10_000 && items.length > 1) {
+    items = items.slice(1);
+    text = JSON.stringify(items);
+  }
+  return text.slice(0, 10_000);
 }
 
 async function askTutor(event) {
   event.preventDefault();
   const question = ui.followup.value.trim();
-  if (!question || !lesson || lesson.sample || activeRequest) return;
+  if (!question || !lesson || lesson.sample || activeRequest || generation || !isReady(activeStep())) return;
   if (lesson.steps.length >= 45) {
     status(ui['ask-status'], 'This board has reached 45 steps. Start a new lesson to continue.');
     return;
@@ -371,15 +563,12 @@ async function askTutor(event) {
   activeRequest = request;
   const current = lesson.cursor;
   const { topic, level, notes, model } = lesson;
-  const prior = lesson.steps.slice(Math.max(0, current - 4), current + 1).map((step, index, context) => ({
-    current: index === context.length - 1,
-    heading: step.heading, explanation: step.explanation, question: step.question
-  }));
+  const context = followupContext(lesson, current);
   renderControls();
   status(ui['ask-status'], 'Answering on the whiteboard…');
   try {
     const answer = await api('/api/followup', {
-      body: { topic, level, notes, model, question, context: JSON.stringify(prior) }, signal: request.signal
+      body: { topic, level, notes, model, question, context }, signal: request.signal
     });
     if (activeRequest !== request) return;
     lesson.steps.splice(current + 1, 0, { ...answer, question });
@@ -437,6 +626,7 @@ ui['followup-form'].addEventListener('submit', askTutor);
 ui['refresh-models'].addEventListener('click', loadModels);
 ui.cancel.addEventListener('click', () => {
   cancelRequest();
+  generation?.controller.abort();
   status(ui.notice, 'Request cancelled.');
   if (lesson && !lesson.sample) status(ui['ask-status']);
 });
@@ -481,6 +671,7 @@ ui['notes-file'].addEventListener('change', async () => {
   status(ui.notice, 'Study notes added.');
 });
 
+for (const event of ['beforeunload', 'pagehide']) window.addEventListener(event, () => { unloading = true; });
 useMic(ui['topic-mic'], ui.topic, ui.notice);
 useMic(ui['ask-mic'], ui.followup, ui['ask-status']);
 renderLesson();
